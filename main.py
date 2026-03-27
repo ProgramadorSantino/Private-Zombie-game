@@ -17,7 +17,7 @@ ZOMBIE_MAX      = 20
 FAST_ZOMBIE_MAX = 10
 TANK_ZOMBIE_MAX = 7
 
-LEVEL_REWARD = 6677
+LEVEL_REWARD = 50
 COLOR_TEXT   = "white"
 
 # --- Shop Constants ---
