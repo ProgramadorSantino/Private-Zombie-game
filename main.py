@@ -22,7 +22,6 @@ COLOR_TEXT   = "white"
 
 # --- Shop Constants ---
 SKIN_COST            = 1000
-LIFE_COST            = 75
 LEVELS_FOR_SHOP      = 5
 REGULAR_HALVED_COST  = 600
 SUPER_HALVED_COST    = 1000
@@ -31,6 +30,7 @@ SKIN_SHOP_PAGES      = 5
 SHOTGUN_HALVED_COST  = 800
 SHOTGUN_SIX_COST     = 750
 EXPLOSIVE_COST       = 600
+LIFE_COST            = 150
 MAX_LIFE_COST        = 800
 BOMB_COST            = 1000
 
@@ -456,7 +456,11 @@ class GameState(object):
         self.min_zombies        = 0
         self.min_fast_zombies   = 0
         self.min_tank_zombies   = 0
-        self.tank_zombie_speed  = 0.2 * SCALE
+        self.tank_zombie_speed   = 0.2 * SCALE
+        self.min_police_zombies  = 0
+        self.police_zombie_speed = 0.15 * SCALE
+        self.police_proj_speed   = 0.6  * SCALE
+        self.doctor_speed        = 1.2 * SCALE
         self.super_ready        = True
         self.regular_ready      = True
         self.last_super         = 0
@@ -556,7 +560,7 @@ def update_player_sprite():
 
 door   = Actor("door",          topleft=(TILE_W * 12, TILE_H))
 doctor = Actor("plague_doctor", topleft=(TILE_W * 4,  TILE_H * 3))
-DOCTOR_SPEED = 1.6 * SCALE
+DOCTOR_SPEED = 1.2 * SCALE
 
 # ---------------------------------
 # Entity classes
@@ -609,7 +613,7 @@ class FastZombie(object):
 class TankZombie(object):
     def __init__(self, x, y, speed):
         self.actor  = Actor("zombiebrute", topleft=(x, y))
-        self.health = 3
+        self.health = 4
         self.speed  = speed
 
     def move(self, target):
@@ -627,6 +631,73 @@ class TankZombie(object):
     def draw(self):
         draw_scaled(self.actor)
 
+
+class PoliceZombieProjectile(object):
+    def __init__(self, x, y, dx, dy, speed):
+        self.actor = Actor("bullet", center=(x, y))
+        self.dx    = dx
+        self.dy    = dy
+        self.speed = speed
+
+    def move(self):
+        self.actor.x += self.dx * self.speed
+        self.actor.y += self.dy * self.speed
+
+    def draw(self):
+        draw_scaled(self.actor)
+
+    def is_offscreen(self):
+        return (self.actor.right < 0 or self.actor.left > WIDTH or
+                self.actor.bottom < 0 or self.actor.top > HEIGHT)
+
+
+class PoliceZombie(object):
+    SHOOT_COOLDOWN = 5.0
+
+    def __init__(self, x, y, speed, proj_speed):
+        self.actor       = Actor("policezombie", topleft=(x, y))
+        self.health      = 3
+        self.speed       = speed
+        self.proj_speed  = proj_speed
+        self.projectiles = []
+        self.last_shot   = 0
+
+    def move(self, target):
+        if self.actor.x < target.x:
+            self.actor.x    += self.speed
+            self.actor.image = "policezombie"
+        elif self.actor.x > target.x:
+            self.actor.x    -= self.speed
+            self.actor.image = "policezombieflipped"
+        if self.actor.y < target.y:
+            self.actor.y += self.speed
+        elif self.actor.y > target.y:
+            self.actor.y -= self.speed
+
+    def try_shoot(self, target):
+        now = time.time()
+        if len(self.projectiles) < 5 and now - self.last_shot >= self.SHOOT_COOLDOWN:
+            dx   = target.x - self.actor.x
+            dy   = target.y - self.actor.y
+            dist = (dx ** 2 + dy ** 2) ** 0.5
+            if dist > 0:
+                dx /= dist
+                dy /= dist
+            self.projectiles.append(
+                PoliceZombieProjectile(self.actor.x, self.actor.y, dx, dy, self.proj_speed))
+            self.last_shot = now
+
+    def update_projectiles(self):
+        for p in self.projectiles[:]:
+            p.move()
+            if p.is_offscreen():
+                self.projectiles.remove(p)
+
+    def draw(self):
+        draw_scaled(self.actor)
+        for p in self.projectiles:
+            p.draw()
+
 # ---------------------------------
 # Entity lists
 # ---------------------------------
@@ -634,6 +705,7 @@ class TankZombie(object):
 zombies        = []
 fast_zombies   = []
 tank_zombies   = []
+police_zombies = []
 projectiles    = []
 key_items      = []
 explosions      = []      # [x, y, frame_index, timer]
@@ -968,6 +1040,8 @@ def draw():
         z.draw()
     for z in tank_zombies:
         z.draw()
+    for z in police_zombies:
+        z.draw()
     for p in projectiles:
         p.draw()
 
@@ -1161,6 +1235,17 @@ def spawn_tank_zombies(count):
                                                game.tank_zombie_speed))
                 break
 
+def spawn_police_zombies(count):
+    for _ in range(count):
+        while True:
+            x = random.randint(1, MAP_W - 2)
+            y = random.randint(1, MAP_H - 4)
+            if game_map[y][x] == 1:
+                police_zombies.append(PoliceZombie(x * TILE_W, y * TILE_H,
+                                                   game.police_zombie_speed,
+                                                   game.police_proj_speed))
+                break
+
 # ---------------------------------
 # Level progression
 # ---------------------------------
@@ -1210,12 +1295,16 @@ def actual_level_progression():
     tank_every = 6 if game.difficulty == "easy" else 3
     if game.score % tank_every == 0:
         game.min_tank_zombies = min(game.min_tank_zombies + 1, tank_cap)
-        game.tank_zombie_speed = min(game.tank_zombie_speed + 0.02 * SCALE,
+        game.tank_zombie_speed = min(game.tank_zombie_speed + 0.06 * SCALE,
                                      tank_speed_limit)
 
-    zombies[:]      = []
-    fast_zombies[:] = []
-    tank_zombies[:] = []
+    if game.score % 4 == 0:
+        game.min_police_zombies = min(game.min_police_zombies + 1, 5)
+
+    zombies[:]        = []
+    fast_zombies[:]   = []
+    tank_zombies[:]   = []
+    police_zombies[:] = []
 
     spawn_zombies(game.min_zombies)
 
@@ -1224,6 +1313,9 @@ def actual_level_progression():
 
     if game.min_tank_zombies > 0:
         spawn_tank_zombies(game.min_tank_zombies)
+
+    if game.min_police_zombies > 0:
+        spawn_police_zombies(game.min_police_zombies)
 
     game.lives += 1
 
@@ -1267,7 +1359,7 @@ def update(dt):
             play_sound("snd_key_pickup")
 
     if game.mode == "survival":
-        if len(zombies) == 0 and len(fast_zombies) == 0 and len(tank_zombies) == 0:
+        if len(zombies) == 0 and len(fast_zombies) == 0 and len(tank_zombies) == 0 and len(police_zombies) == 0:
             next_level()
     else:
         if len(key_items) == 0 and classd.colliderect(door):
@@ -1281,15 +1373,15 @@ def move_doctor():
     if game.mode == "survival":
         return
     if doctor.x < classd.x:
-        doctor.x    += DOCTOR_SPEED
+        doctor.x    += game.doctor_speed
         doctor.image = "plague_doctor"
     elif doctor.x > classd.x:
-        doctor.x    -= DOCTOR_SPEED
+        doctor.x    -= game.doctor_speed
         doctor.image = "plague_doctor_flipped"
     if doctor.y < classd.y:
-        doctor.y += DOCTOR_SPEED
+        doctor.y += game.doctor_speed
     elif doctor.y > classd.y:
-        doctor.y -= DOCTOR_SPEED
+        doctor.y -= game.doctor_speed
 
 
 def update_zombies():
@@ -1299,6 +1391,10 @@ def update_zombies():
         z.move(classd)
     for z in tank_zombies:
         z.move(classd)
+    for z in police_zombies:
+        z.move(classd)
+        z.try_shoot(classd)
+        z.update_projectiles()
 
 # ---------------------------------
 # Collisions
@@ -1333,7 +1429,7 @@ def check_collisions():
 
     for z in tank_zombies[:]:
         if classd.colliderect(z.actor):
-            game.lives -= 4
+            game.lives -= 2
             play_sound("snd_player_hit")
             if game.lives <= 0:
                 _trigger_game_over()
@@ -1341,6 +1437,27 @@ def check_collisions():
                 classd.topleft = (TILE_W, TILE_H * (MAP_H - 3))
                 tank_zombies.remove(z)
             break
+
+    for z in police_zombies[:]:
+        if classd.colliderect(z.actor):
+            game.lives -= 1
+            play_sound("snd_player_hit")
+            if game.lives <= 0:
+                _trigger_game_over()
+            else:
+                classd.topleft = (TILE_W, TILE_H * (MAP_H - 3))
+                police_zombies.remove(z)
+            break
+        for p in z.projectiles[:]:
+            if classd.colliderect(p.actor):
+                z.projectiles.remove(p)
+                game.lives -= 1
+                play_sound("snd_player_hit")
+                if game.lives <= 0:
+                    _trigger_game_over()
+                else:
+                    classd.topleft = (TILE_W, TILE_H * (MAP_H - 3))
+                break
 
 # ---------------------------------
 # Projectiles and shooting
@@ -1399,6 +1516,21 @@ def update_projectiles():
                 if not p.piercing and p in projectiles:
                     projectiles.remove(p)
                 break
+        for z in police_zombies[:]:
+            if p in projectiles and p.actor.colliderect(z.actor):
+                spawn_spark(p.actor.x, p.actor.y)
+                z.health -= p.damage
+                if z.health <= 0:
+                    spawn_skull(z.actor.x, z.actor.y)
+                    police_zombies.remove(z)
+                    game.money += int(25 * game.coin_multiplier)
+                if p.bomb:
+                    do_bomb_explosion(p.actor.x, p.actor.y)
+                elif p.explosive:
+                    do_explosion(p.actor.x, p.actor.y)
+                if not p.piercing and p in projectiles:
+                    projectiles.remove(p)
+                break
 
 
 def shoot(super_shot):
@@ -1434,6 +1566,13 @@ def do_explosion(px, py):
                 spawn_skull(z.actor.x, z.actor.y)
                 tank_zombies.remove(z)
                 game.money += int(30 * game.coin_multiplier)
+    for z in police_zombies[:]:
+        if ((z.actor.x - px) ** 2 + (z.actor.y - py) ** 2) ** 0.5 <= radius:
+            z.health -= 1
+            if z.health <= 0:
+                spawn_skull(z.actor.x, z.actor.y)
+                police_zombies.remove(z)
+                game.money += int(25 * game.coin_multiplier)
 
 
 def update_explosions(dt):
@@ -1472,6 +1611,13 @@ def do_bomb_explosion(px, py):
                 spawn_skull(z.actor.x, z.actor.y)
                 tank_zombies.remove(z)
                 game.money += int(30 * game.coin_multiplier)
+    for z in police_zombies[:]:
+        if ((z.actor.x - px) ** 2 + (z.actor.y - py) ** 2) ** 0.5 <= radius:
+            z.health -= 2
+            if z.health <= 0:
+                spawn_skull(z.actor.x, z.actor.y)
+                police_zombies.remove(z)
+                game.money += int(25 * game.coin_multiplier)
 
 
 def update_bomb_explosions(dt):
@@ -1565,9 +1711,12 @@ def on_key_down(key):
         if chosen:
             diff                 = DIFFICULTY_SETTINGS[chosen]
             game.difficulty      = chosen
-            game.coin_multiplier = diff["coin_mult"]
-            game.zombie_speed    = 0.3 * SCALE * diff["speed_mult"]
-            game.fast_zombie_speed = 0.6 * SCALE * diff["speed_mult"]
+            game.coin_multiplier    = diff["coin_mult"]
+            game.zombie_speed       = 0.3  * SCALE * diff["speed_mult"]
+            game.fast_zombie_speed  = 0.6  * SCALE * diff["speed_mult"]
+            game.police_zombie_speed = 0.15 * SCALE * diff["speed_mult"]
+            game.police_proj_speed   = 0.6  * SCALE * diff["speed_mult"]
+            game.doctor_speed       = 1.2  * SCALE * diff["speed_mult"]
             if game.mode == "survival":
                 game.zombie_speed      *= 1.1
                 game.fast_zombie_speed *= 1.1
@@ -1581,10 +1730,11 @@ def on_key_down(key):
     # Restart
     if game.state == "game_over" and key == pygame.K_r:
         game.__init__()
-        zombies[:]       = []
-        fast_zombies[:]  = []
-        tank_zombies[:]  = []
-        projectiles[:]   = []
+        zombies[:]        = []
+        fast_zombies[:]   = []
+        tank_zombies[:]   = []
+        police_zombies[:] = []
+        projectiles[:]    = []
         key_items[:]     = [spawn_key()]
         classd.topleft   = (TILE_W, TILE_H * (MAP_H - 3))
         doctor.topleft   = (TILE_W * 4, TILE_H * 3)
@@ -1848,3 +1998,4 @@ while True:
     update(dt)
     draw()
     pygame.display.flip()
+
