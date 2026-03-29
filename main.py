@@ -482,7 +482,7 @@ class GameState(object):
         self.super_halved       = False
         self.shotgun_ready      = True
         self.last_shotgun       = 0
-        self.SHOTGUN_COOLDOWN   = 30.0
+        self.SHOTGUN_COOLDOWN   = 20
         self.shotgun_halved     = False
         self.shotgun_six        = False
         self.explosive_shots    = False
@@ -1797,17 +1797,17 @@ def on_key_down(key):
         return
 
     # Movement
-    if key == pygame.K_LEFT:
+    if key in (pygame.K_LEFT, pygame.K_a):
         classd.x -= TILE_W
         facing    = "left"
         update_player_sprite()
-    elif key == pygame.K_RIGHT:
+    elif key in (pygame.K_RIGHT, pygame.K_d):
         classd.x += TILE_W
         facing    = "right"
         update_player_sprite()
-    elif key == pygame.K_UP:
+    elif key in (pygame.K_UP, pygame.K_w):
         classd.y -= TILE_H
-    elif key == pygame.K_DOWN:
+    elif key in (pygame.K_DOWN, pygame.K_s):
         classd.y += TILE_H
 
     # Clamp inside map
@@ -1998,4 +1998,3 @@ while True:
     update(dt)
     draw()
     pygame.display.flip()
-
