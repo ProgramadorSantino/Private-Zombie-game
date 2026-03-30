@@ -816,24 +816,27 @@ class PoliceZombie(object):
 
 class BossZombie(object):
     SHOOT_COOLDOWN = 4.0
-    SPAWN_COOLDOWN = 20.0
+    SPAWN_COOLDOWN = 15.0
 
-    def __init__(self, x, y, speed=None, health=None):
+    def __init__(self, x, y, speed=None, health=None, spawn_count=2, spawn_cooldown=20.0):
         _w = _boss_idle_right_frames[0].get_width()
         _h = _boss_idle_right_frames[0].get_height()
-        self.x          = float(x) + _w // 2
-        self.y          = float(y) + _h // 2
-        self.health     = health if health is not None else 10
-        self.speed      = speed  if speed  is not None else 0.9 * SCALE
-        self.facing     = "right"
-        self.anim_name  = "idle"
-        self.anim_frame = 0
-        self.anim_timer = 0.0
-        self.dying      = False
-        self.die_frame  = 0
-        self.die_timer  = 0.0
-        self.shoot_timer = 0.0
-        self.spawn_timer = 0.0
+        self.x             = float(x) + _w // 2
+        self.y             = float(y) + _h // 2
+        self.health        = health if health is not None else 10
+        self.max_health    = self.health
+        self.speed         = speed  if speed  is not None else 0.9 * SCALE
+        self.facing        = "right"
+        self.anim_name     = "idle"
+        self.anim_frame    = 0
+        self.anim_timer    = 0.0
+        self.dying         = False
+        self.die_frame     = 0
+        self.die_timer     = 0.0
+        self.shoot_timer   = 0.0
+        self.spawn_timer   = 0.0
+        self.spawn_count   = spawn_count
+        self.spawn_cooldown = spawn_cooldown
 
     def _get_rect(self):
         if self.dying:
@@ -898,9 +901,9 @@ class BossZombie(object):
             boss_projectiles.append(BossProjectile(self.x, self.y, dx, dy))
 
         self.spawn_timer += dt
-        if self.spawn_timer >= self.SPAWN_COOLDOWN:
+        if self.spawn_timer >= self.spawn_cooldown:
             self.spawn_timer = 0.0
-            for _ in range(2):
+            for _ in range(self.spawn_count):
                 while True:
                     tx = random.randint(1, MAP_W - 2)
                     ty = random.randint(1, MAP_H - 4)
@@ -1221,11 +1224,15 @@ def draw_mode_select():
               center=(WIDTH // 2, HEIGHT // 2 - 60),
               fontsize=42, color="white")
     draw_text("[S] SCAPEROOM -- Collect keys, reach the door, survive the Doctor",
-              center=(WIDTH // 2, HEIGHT // 2), fontsize=30, color="cyan")
+              center=(WIDTH // 2, HEIGHT // 2 - 20), fontsize=30, color="cyan")
     draw_text("[V] SURVIVAL -- Kill all zombies to advance, no Doctor,",
-              center=(WIDTH // 2, HEIGHT // 2 + 35), fontsize=30, color="orange")
+              center=(WIDTH // 2, HEIGHT // 2 + 15), fontsize=30, color="orange")
     draw_text("               double zombie limits, 10% faster zombies",
-              center=(WIDTH // 2, HEIGHT // 2 + 60), fontsize=30, color="orange")
+              center=(WIDTH // 2, HEIGHT // 2 + 40), fontsize=30, color="orange")
+    draw_text("[B] BOSS RUSH -- Survive endless boss waves, one new boss",
+              center=(WIDTH // 2, HEIGHT // 2 + 80), fontsize=30, color="red")
+    draw_text("               every 10 waves, each boss scales each wave",
+              center=(WIDTH // 2, HEIGHT // 2 + 105), fontsize=30, color="red")
 
 
 def draw_menu():
@@ -1257,7 +1264,8 @@ def draw():
 
     screen.fill((30, 30, 30))
     draw_map()
-    draw_scaled(door)
+    if game.mode == "scaperoom":
+        draw_scaled(door)
     draw_scaled(classd)
 
     if game.mode == "scaperoom":
@@ -1391,16 +1399,21 @@ def draw_ui():
 
     alive_bosses = [b for b in boss_zombies if not b.dying]
     if alive_bosses:
-        boss    = alive_bosses[0]
-        bar_w   = 200
-        bar_h   = 20
-        bx      = WIDTH // 2 - bar_w // 2
-        by      = 8
-        draw_text("BOSS", center=(WIDTH // 2, by), fontsize=22, color="red", shadow=(1, 1))
-        pygame.draw.rect(screen, (80, 0, 0),   (bx, by + 18, bar_w, bar_h))
-        fill_w = int(bar_w * max(0, boss.health) / 10)
-        pygame.draw.rect(screen, (220, 0, 0),  (bx, by + 18, fill_w, bar_h))
-        pygame.draw.rect(screen, (255, 100, 100), (bx, by + 18, bar_w, bar_h), 2)
+        bar_w    = 300
+        bar_h    = 20
+        bar_gap  = 4
+        label    = "BOSS" if len(alive_bosses) == 1 else "BOSS  x{}".format(len(alive_bosses))
+        draw_text(label, center=(WIDTH // 2, 12), fontsize=20, color="red", shadow=(1, 1))
+        for i, boss in enumerate(alive_bosses):
+            bx     = WIDTH // 2 - bar_w // 2
+            by     = 26 + i * (bar_h + bar_gap)
+            fill_w = int(bar_w * max(0, min(boss.health, boss.max_health)) / boss.max_health)
+            bar_surf = pygame.Surface((bar_w, bar_h))
+            bar_surf.fill((60, 0, 0))
+            if fill_w > 0:
+                pygame.draw.rect(bar_surf, (210, 0, 0), (0, 0, fill_w, bar_h))
+            pygame.draw.rect(bar_surf, (255, 80, 80), (0, 0, bar_w, bar_h), 2)
+            screen.blit(bar_surf, (bx, by))
 
 # ---------------------------------
 # Settings overlay
@@ -1508,13 +1521,40 @@ def spawn_police_zombies(count):
                 break
 
 def spawn_boss_zombie():
-    spd = 0.8 * SCALE + game.boss_level * 0.15
-    hp  = 10 + game.boss_level * 5
+    spd            = 0.8 * SCALE + game.boss_level * 0.15
+    hp             = 10 + game.boss_level * 5
+    spawn_count    = min(2 + game.boss_level, 5)
+    spawn_cooldown = max(20.0 - game.boss_level * 2.0, 10.0)
     while True:
         x = random.randint(1, MAP_W - 2)
         y = random.randint(1, MAP_H - 4)
         if _safe_spawn_tile(x, y):
-            boss_zombies.append(BossZombie(x * TILE_W, y * TILE_H, speed=spd, health=hp))
+            boss_zombies.append(BossZombie(x * TILE_W, y * TILE_H,
+                                           speed=spd, health=hp,
+                                           spawn_count=spawn_count,
+                                           spawn_cooldown=spawn_cooldown))
+            break
+
+def _rush_boss_stats(rush_level):
+    """Compute BossRush boss stats for a given rush level (0 = freshest, 9 = fully capped)."""
+    rl   = max(0, min(rush_level, 9))
+    diff = DIFFICULTY_SETTINGS.get(game.difficulty, {"speed_mult": 1.0})
+    spd  = min((0.8 + rl * (0.5 / 9.0)) * SCALE * diff["speed_mult"], 1.3 * SCALE)
+    hp   = 15 + rl * 5                     # 15 HP at rl=0, 60 HP at rl=9
+    sc   = min(2 + rl // 4, 4)             # 2 → 3 → 4, caps at rl=8
+    scd  = max(20.0 - rl * (8.0 / 9.0), 12.0)  # 20s → 12s
+    return spd, hp, sc, scd
+
+def spawn_rush_boss(rush_level):
+    spd, hp, sc, scd = _rush_boss_stats(rush_level)
+    while True:
+        x = random.randint(1, MAP_W - 2)
+        y = random.randint(1, MAP_H - 4)
+        if _safe_spawn_tile(x, y):
+            boss_zombies.append(BossZombie(x * TILE_W, y * TILE_H,
+                                           speed=spd, health=hp,
+                                           spawn_count=sc,
+                                           spawn_cooldown=scd))
             break
 
 # ---------------------------------
@@ -1535,6 +1575,18 @@ def next_level():
 
 
 def actual_level_progression():
+    if game.mode == "bossrush":
+        boss_zombies[:]      = []
+        boss_projectiles[:]  = []
+        key_items[:]         = []
+        num_bosses = (game.score // 5) + 1
+        for k in range(num_bosses):
+            rush_level = game.score - k * 5
+            if rush_level >= 0:
+                spawn_rush_boss(rush_level)
+        game.lives += 1
+        return
+
     zombie_cap = ZOMBIE_MAX      * 2 if game.mode == "survival" else ZOMBIE_MAX
     fast_cap   = FAST_ZOMBIE_MAX * 2 if game.mode == "survival" else FAST_ZOMBIE_MAX
     tank_cap   = TANK_ZOMBIE_MAX * 2 if game.mode == "survival" else TANK_ZOMBIE_MAX
@@ -1667,13 +1719,13 @@ def update(dt):
             key_items.remove(key)
             play_sound("snd_key_pickup")
 
-    if game.mode == "survival":
+    if game.mode in ("survival", "bossrush"):
         active_bosses = [b for b in boss_zombies if not b.dying]
         if (len(zombies) == 0 and len(fast_zombies) == 0 and
                 len(tank_zombies) == 0 and len(police_zombies) == 0 and
                 len(active_bosses) == 0):
             next_level()
-    else:
+    elif game.mode == "scaperoom":
         if len(key_items) == 0 and classd.colliderect(door):
             next_level()
 
@@ -1682,7 +1734,7 @@ def update(dt):
 # ---------------------------------
 
 def move_doctor():
-    if game.mode == "survival":
+    if game.mode in ("survival", "bossrush"):
         return
     if doctor.x < classd.x:
         doctor.x    += game.doctor_speed
@@ -2042,6 +2094,9 @@ def on_key_down(key):
         elif key == pygame.K_v:
             game.mode  = "survival"
             game.state = "menu"
+        elif key == pygame.K_b:
+            game.mode  = "bossrush"
+            game.state = "menu"
         return
 
     # Difficulty selection
@@ -2070,6 +2125,9 @@ def on_key_down(key):
                 game.fast_zombie_speed *= 1.1
                 key_items[:] = []
                 spawn_zombies(2)
+            elif game.mode == "bossrush":
+                key_items[:] = []
+                spawn_rush_boss(0)
             else:
                 spawn_zombies(1)
             game.state = "playing"

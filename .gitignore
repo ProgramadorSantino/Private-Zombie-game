@@ -2,3 +2,6 @@ __pycache__/
 *.py[cod]
 desktop.ini
 *.pyc
+# root-level stray boss images (should live in BossImages/)
+/boss_*.png
+/checklist.md
