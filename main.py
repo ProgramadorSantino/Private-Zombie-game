@@ -65,6 +65,9 @@ SETTINGS_PAGES_DATA = [
         ("Spark FX",        "vfx_spark"),
         ("Rings FX",        "vfx_rings"),
     ]),
+    ("Music", [
+        ("Menu Music", "music_enabled"),
+    ]),
 ]
 
 settings = {
@@ -73,6 +76,7 @@ settings = {
     "snd_level_up": True, "snd_buy": True, "snd_game_over": True,
     "vfx_explosion": True, "vfx_bomb_explosion": True,
     "vfx_skull": True, "vfx_spark": True, "vfx_rings": True,
+    "music_enabled": True,
 }
 settings_open = False
 settings_page = 0
@@ -100,6 +104,7 @@ SCALE = 1.2
 _raw_border = pygame.image.load("images/border.png")
 TILE_W = _raw_border.get_width()  * SCALE   # 60.0
 TILE_H = _raw_border.get_height() * SCALE   # 60.0
+SPAWN_SAFE_RADIUS = 5 * TILE_W              # 300px — min distance from player to spawn tile
 
 WIDTH  = int(MAP_W * TILE_W)           # 1560
 HEIGHT = int(len(game_map) * TILE_H)   # 1020
@@ -155,6 +160,11 @@ _image_cache = {}
 def load_image(name):
     if name not in _image_cache:
         _image_cache[name] = pygame.image.load("images/" + name + ".png").convert_alpha()
+    return _image_cache[name]
+
+def load_boss_image(name):
+    if name not in _image_cache:
+        _image_cache[name] = pygame.image.load("BossImages/" + name + ".png").convert_alpha()
     return _image_cache[name]
 
 # ---------------------------------
@@ -430,6 +440,24 @@ for _i in range(1, 16):
         _ow // 2, _oh // 2
     ))
 
+def _cache_boss_frames(base_name, count):
+    frames = []
+    for _i in range(1, count + 1):
+        _img    = load_boss_image(base_name + str(_i))
+        _ow, _oh = _img.get_size()
+        frames.append(pygame.transform.scale(_img, (int(_ow * SCALE), int(_oh * SCALE))))
+    return frames
+
+_boss_move_right_frames = _cache_boss_frames("boss_move",     13)
+_boss_move_left_frames  = _cache_boss_frames("boss_moveleft", 13)
+_boss_idle_right_frames = _cache_boss_frames("boss_idle",     12)
+_boss_idle_left_frames  = _cache_boss_frames("boss_idleleft", 12)
+_boss_die_right_frames  = _cache_boss_frames("boss_die",      32)
+_boss_die_left_frames   = _cache_boss_frames("boss_dieleft",  32)
+_boss_proj_right_frames = _cache_boss_frames("boss_proj",     30)
+_boss_proj_left_frames  = _cache_boss_frames("boss_projleft", 30)
+_boss_hit_frames        = _cache_boss_frames("boss_hit",       6)
+
 # ---------------------------------
 # Speed / difficulty constants
 # ---------------------------------
@@ -479,8 +507,8 @@ class GameState(object):
         self.min_tank_zombies   = 0
         self.tank_zombie_speed   = 0.2 * SCALE
         self.min_police_zombies  = 0
-        self.police_zombie_speed = 0.15 * SCALE
-        self.police_proj_speed   = 0.6  * SCALE
+        self.police_zombie_speed = 0.35 * SCALE
+        self.police_proj_speed   = 0.8  * SCALE
         self.doctor_speed        = 1.2 * SCALE
         self.super_ready        = True
         self.regular_ready      = True
@@ -511,6 +539,7 @@ class GameState(object):
         self.bomb_ready         = True
         self.last_bomb          = 0
         self.BOMB_COOLDOWN      = 50.0
+        self.boss_level         = 0
 
 game = GameState()
 
@@ -697,6 +726,46 @@ class PoliceZombieProjectile(object):
                 self.actor.bottom < 0 or self.actor.top > HEIGHT)
 
 
+class BossProjectile(object):
+    def __init__(self, x, y, dx, dy):
+        self.x          = float(x)
+        self.y          = float(y)
+        self.dx         = dx
+        self.dy         = dy
+        self.speed      = 4 * SCALE
+        self.facing     = "right" if dx >= 0 else "left"
+        self.proj_frame = 0
+        self.proj_timer = 0.0
+
+    def move(self, dt):
+        self.x += self.dx * self.speed
+        self.y += self.dy * self.speed
+        self.proj_timer += dt
+        if self.proj_timer >= 0.04:
+            self.proj_timer -= 0.04
+            self.proj_frame = (self.proj_frame + 1) % 30
+
+    def draw(self):
+        frames = _boss_proj_right_frames if self.facing == "right" else _boss_proj_left_frames
+        surf   = frames[self.proj_frame]
+        screen.blit(surf, (int(self.x) - surf.get_width() // 2, int(self.y) - surf.get_height() // 2))
+
+    def is_offscreen(self):
+        return (self.x < 0 or self.x > WIDTH or self.y < 0 or self.y > HEIGHT)
+
+    def _get_rect(self):
+        frames = _boss_proj_right_frames if self.facing == "right" else _boss_proj_left_frames
+        surf   = frames[self.proj_frame]
+        w, h   = surf.get_size()
+        return pygame.Rect(int(self.x) - w // 2, int(self.y) - h // 2, w, h)
+
+    def colliderect(self, other):
+        r = self._get_rect()
+        if isinstance(other, Actor):
+            return r.colliderect(other._get_rect())
+        return r.colliderect(other)
+
+
 class PoliceZombie(object):
     SHOOT_COOLDOWN = 5.0
 
@@ -744,6 +813,120 @@ class PoliceZombie(object):
         for p in self.projectiles:
             p.draw()
 
+
+class BossZombie(object):
+    SHOOT_COOLDOWN = 4.0
+    SPAWN_COOLDOWN = 20.0
+
+    def __init__(self, x, y, speed=None, health=None):
+        _w = _boss_idle_right_frames[0].get_width()
+        _h = _boss_idle_right_frames[0].get_height()
+        self.x          = float(x) + _w // 2
+        self.y          = float(y) + _h // 2
+        self.health     = health if health is not None else 10
+        self.speed      = speed  if speed  is not None else 0.9 * SCALE
+        self.facing     = "right"
+        self.anim_name  = "idle"
+        self.anim_frame = 0
+        self.anim_timer = 0.0
+        self.dying      = False
+        self.die_frame  = 0
+        self.die_timer  = 0.0
+        self.shoot_timer = 0.0
+        self.spawn_timer = 0.0
+
+    def _get_rect(self):
+        if self.dying:
+            frames = _boss_die_right_frames if self.facing == "right" else _boss_die_left_frames
+            idx    = min(self.die_frame, len(frames) - 1)
+        elif self.anim_name == "move":
+            frames = _boss_move_right_frames if self.facing == "right" else _boss_move_left_frames
+            idx    = self.anim_frame
+        else:
+            frames = _boss_idle_right_frames if self.facing == "right" else _boss_idle_left_frames
+            idx    = self.anim_frame
+        surf = frames[idx]
+        w, h = surf.get_size()
+        return pygame.Rect(int(self.x) - w // 2, int(self.y) - h // 2, w, h)
+
+    def colliderect(self, other):
+        r = self._get_rect()
+        if isinstance(other, Actor):
+            return r.colliderect(other._get_rect())
+        return r.colliderect(other)
+
+    def move(self, target):
+        if self.dying:
+            return
+        if target.x > self.x:
+            self.x     += self.speed
+            self.facing = "right"
+        elif target.x < self.x:
+            self.x     -= self.speed
+            self.facing = "left"
+        if target.y > self.y:
+            self.y += self.speed
+        elif target.y < self.y:
+            self.y -= self.speed
+        self.anim_name = "move"
+
+    def update(self, dt):
+        if self.dying:
+            self.die_timer += dt
+            if self.die_timer >= 0.06:
+                self.die_timer -= 0.06
+                self.die_frame += 1
+            return
+
+        frame_count      = 13 if self.anim_name == "move" else 12
+        self.anim_timer += dt
+        if self.anim_timer >= 0.07:
+            self.anim_timer -= 0.07
+            self.anim_frame  = (self.anim_frame + 1) % frame_count
+
+        self.shoot_timer += dt
+        if self.shoot_timer >= self.SHOOT_COOLDOWN:
+            self.shoot_timer = 0.0
+            self.anim_name   = "idle"
+            self.anim_frame  = 0
+            dx   = classd.x - self.x
+            dy   = classd.y - self.y
+            dist = (dx ** 2 + dy ** 2) ** 0.5
+            if dist > 0:
+                dx /= dist
+                dy /= dist
+            boss_projectiles.append(BossProjectile(self.x, self.y, dx, dy))
+
+        self.spawn_timer += dt
+        if self.spawn_timer >= self.SPAWN_COOLDOWN:
+            self.spawn_timer = 0.0
+            for _ in range(2):
+                while True:
+                    tx = random.randint(1, MAP_W - 2)
+                    ty = random.randint(1, MAP_H - 4)
+                    if _safe_spawn_tile(tx, ty):
+                        ztype = random.choice(["zombie", "fast", "tank"])
+                        if ztype == "zombie":
+                            zombies.append(Zombie(tx * TILE_W, ty * TILE_H, game.zombie_speed))
+                        elif ztype == "fast":
+                            fast_zombies.append(FastZombie(tx * TILE_W, ty * TILE_H, game.fast_zombie_speed))
+                        else:
+                            tank_zombies.append(TankZombie(tx * TILE_W, ty * TILE_H, game.tank_zombie_speed))
+                        break
+
+    def draw(self):
+        if self.dying:
+            frames = _boss_die_right_frames if self.facing == "right" else _boss_die_left_frames
+            idx    = min(self.die_frame, len(frames) - 1)
+        elif self.anim_name == "move":
+            frames = _boss_move_right_frames if self.facing == "right" else _boss_move_left_frames
+            idx    = self.anim_frame
+        else:
+            frames = _boss_idle_right_frames if self.facing == "right" else _boss_idle_left_frames
+            idx    = self.anim_frame
+        surf = frames[idx]
+        screen.blit(surf, (int(self.x) - surf.get_width() // 2, int(self.y) - surf.get_height() // 2))
+
 # ---------------------------------
 # Entity lists
 # ---------------------------------
@@ -752,13 +935,16 @@ zombies        = []
 fast_zombies   = []
 tank_zombies   = []
 police_zombies = []
+boss_zombies   = []
 projectiles    = []
+boss_projectiles = []
 key_items      = []
 explosions      = []      # [x, y, frame_index, timer]
 bomb_explosions = []      # [x, y, frame_index, timer]
 skull_effects   = []      # [x, y, frame_index, timer]
 spark_effects   = []      # [x, y, frame_index, timer]
 rings_effects   = []      # [x, y, frame_index, timer]
+boss_hit_effects = []     # [x, y, frame_index, timer]
 
 # ---------------------------------
 # VFX spawn helpers (respect settings)
@@ -1034,9 +1220,9 @@ def draw_mode_select():
     draw_text("Select Mode:",
               center=(WIDTH // 2, HEIGHT // 2 - 60),
               fontsize=42, color="white")
-    draw_text("[S] SCAPEROOM  - Collect keys, reach the door, survive the Doctor",
+    draw_text("[S] SCAPEROOM -- Collect keys, reach the door, survive the Doctor",
               center=(WIDTH // 2, HEIGHT // 2), fontsize=30, color="cyan")
-    draw_text("[V] SURVIVAL   - Kill all zombies to advance, no Doctor,",
+    draw_text("[V] SURVIVAL -- Kill all zombies to advance, no Doctor,",
               center=(WIDTH // 2, HEIGHT // 2 + 35), fontsize=30, color="orange")
     draw_text("               double zombie limits, 10% faster zombies",
               center=(WIDTH // 2, HEIGHT // 2 + 60), fontsize=30, color="orange")
@@ -1088,6 +1274,10 @@ def draw():
         z.draw()
     for z in police_zombies:
         z.draw()
+    for boss in boss_zombies:
+        boss.draw()
+    for bp in boss_projectiles:
+        bp.draw()
     for p in projectiles:
         p.draw()
 
@@ -1110,6 +1300,10 @@ def draw():
     for e in rings_effects:
         frame, ox, oy = _rings_frames[e[2]]
         screen.blit(frame, (int(e[0]) - ox, int(e[1]) - oy))
+
+    for e in boss_hit_effects:
+        surf = _boss_hit_frames[e[2]]
+        screen.blit(surf, (int(e[0]) - surf.get_width() // 2, int(e[1]) - surf.get_height() // 2))
 
     if game.skin_shop_open:
         draw_skin_shop()
@@ -1195,6 +1389,19 @@ def draw_ui():
     draw_text(sup_text, topleft=(10, 150), fontsize=24, color=sup_color)
     draw_text(reg_text, topleft=(10, 175), fontsize=24, color=reg_color)
 
+    alive_bosses = [b for b in boss_zombies if not b.dying]
+    if alive_bosses:
+        boss    = alive_bosses[0]
+        bar_w   = 200
+        bar_h   = 20
+        bx      = WIDTH // 2 - bar_w // 2
+        by      = 8
+        draw_text("BOSS", center=(WIDTH // 2, by), fontsize=22, color="red", shadow=(1, 1))
+        pygame.draw.rect(screen, (80, 0, 0),   (bx, by + 18, bar_w, bar_h))
+        fill_w = int(bar_w * max(0, boss.health) / 10)
+        pygame.draw.rect(screen, (220, 0, 0),  (bx, by + 18, fill_w, bar_h))
+        pygame.draw.rect(screen, (255, 100, 100), (bx, by + 18, bar_w, bar_h), 2)
+
 # ---------------------------------
 # Settings overlay
 # ---------------------------------
@@ -1252,12 +1459,20 @@ def draw_settings():
 # Spawning
 # ---------------------------------
 
+def _safe_spawn_tile(x, y):
+    """Return True if tile (x,y) is a floor tile far enough from the player."""
+    if game_map[y][x] != 1:
+        return False
+    px = x * TILE_W - classd.x
+    py = y * TILE_H - classd.y
+    return (px * px + py * py) >= SPAWN_SAFE_RADIUS * SPAWN_SAFE_RADIUS
+
 def spawn_zombies(count):
     for _ in range(count):
         while True:
             x = random.randint(1, MAP_W - 2)
             y = random.randint(1, MAP_H - 4)
-            if game_map[y][x] == 1:
+            if _safe_spawn_tile(x, y):
                 zombies.append(Zombie(x * TILE_W, y * TILE_H, game.zombie_speed))
                 break
 
@@ -1266,7 +1481,7 @@ def spawn_fast_zombies(count):
         while True:
             x = random.randint(1, MAP_W - 2)
             y = random.randint(1, MAP_H - 4)
-            if game_map[y][x] == 1:
+            if _safe_spawn_tile(x, y):
                 fast_zombies.append(FastZombie(x * TILE_W, y * TILE_H,
                                                game.fast_zombie_speed))
                 break
@@ -1276,7 +1491,7 @@ def spawn_tank_zombies(count):
         while True:
             x = random.randint(1, MAP_W - 2)
             y = random.randint(1, MAP_H - 4)
-            if game_map[y][x] == 1:
+            if _safe_spawn_tile(x, y):
                 tank_zombies.append(TankZombie(x * TILE_W, y * TILE_H,
                                                game.tank_zombie_speed))
                 break
@@ -1286,11 +1501,21 @@ def spawn_police_zombies(count):
         while True:
             x = random.randint(1, MAP_W - 2)
             y = random.randint(1, MAP_H - 4)
-            if game_map[y][x] == 1:
+            if _safe_spawn_tile(x, y):
                 police_zombies.append(PoliceZombie(x * TILE_W, y * TILE_H,
                                                    game.police_zombie_speed,
                                                    game.police_proj_speed))
                 break
+
+def spawn_boss_zombie():
+    spd = 0.8 * SCALE + game.boss_level * 0.15
+    hp  = 10 + game.boss_level * 5
+    while True:
+        x = random.randint(1, MAP_W - 2)
+        y = random.randint(1, MAP_H - 4)
+        if _safe_spawn_tile(x, y):
+            boss_zombies.append(BossZombie(x * TILE_W, y * TILE_H, speed=spd, health=hp))
+            break
 
 # ---------------------------------
 # Level progression
@@ -1347,10 +1572,11 @@ def actual_level_progression():
     if game.score % 4 == 0:
         game.min_police_zombies = min(game.min_police_zombies + 1, 5)
 
-    zombies[:]        = []
-    fast_zombies[:]   = []
-    tank_zombies[:]   = []
-    police_zombies[:] = []
+    zombies[:]         = []
+    fast_zombies[:]    = []
+    tank_zombies[:]    = []
+    police_zombies[:]  = []
+    boss_projectiles[:] = []
 
     spawn_zombies(game.min_zombies)
 
@@ -1363,12 +1589,46 @@ def actual_level_progression():
     if game.min_police_zombies > 0:
         spawn_police_zombies(game.min_police_zombies)
 
+    if game.score % 5 == 0:
+        boss_zombies[:] = []
+        spawn_boss_zombie()
+        game.boss_level += 1
+
     game.lives += 1
 
     if game.mode == "survival":
         key_items[:] = []
     else:
         key_items[:] = [spawn_key() for _ in range(game.score + 1)]
+
+# ---------------------------------
+# Boss update helpers
+# ---------------------------------
+
+def update_boss_zombies(dt):
+    for boss in boss_zombies[:]:
+        if not boss.dying:
+            boss.move(classd)
+        boss.update(dt)
+        if boss.dying and boss.die_frame >= 32:
+            boss_zombies.remove(boss)
+
+
+def update_boss_projectiles(dt):
+    for bp in boss_projectiles[:]:
+        bp.move(dt)
+        if bp.is_offscreen():
+            boss_projectiles.remove(bp)
+
+
+def update_boss_hit_effects(dt):
+    for e in boss_hit_effects[:]:
+        e[3] += dt
+        if e[3] >= 0.05:
+            e[3] -= 0.05
+            e[2] += 1
+        if e[2] >= 6:
+            boss_hit_effects.remove(e)
 
 # ---------------------------------
 # Update (main loop logic)
@@ -1397,6 +1657,9 @@ def update(dt):
     update_skull_effects(dt)
     update_spark_effects(dt)
     update_rings_effects(dt)
+    update_boss_zombies(dt)
+    update_boss_projectiles(dt)
+    update_boss_hit_effects(dt)
 
     for key in key_items[:]:
         if classd.colliderect(key):
@@ -1405,7 +1668,10 @@ def update(dt):
             play_sound("snd_key_pickup")
 
     if game.mode == "survival":
-        if len(zombies) == 0 and len(fast_zombies) == 0 and len(tank_zombies) == 0 and len(police_zombies) == 0:
+        active_bosses = [b for b in boss_zombies if not b.dying]
+        if (len(zombies) == 0 and len(fast_zombies) == 0 and
+                len(tank_zombies) == 0 and len(police_zombies) == 0 and
+                len(active_bosses) == 0):
             next_level()
     else:
         if len(key_items) == 0 and classd.colliderect(door):
@@ -1505,6 +1771,28 @@ def check_collisions():
                     classd.topleft = (TILE_W, TILE_H * (MAP_H - 3))
                 break
 
+    for bp in boss_projectiles[:]:
+        if bp.colliderect(classd):
+            boss_projectiles.remove(bp)
+            boss_hit_effects.append([bp.x, bp.y, 0, 0.0])
+            game.lives -= 2
+            play_sound("snd_player_hit")
+            if game.lives <= 0:
+                _trigger_game_over()
+            else:
+                classd.topleft = (TILE_W, TILE_H * (MAP_H - 3))
+            break
+
+    for boss in boss_zombies[:]:
+        if not boss.dying and boss.colliderect(classd):
+            game.lives -= 3
+            play_sound("snd_player_hit")
+            if game.lives <= 0:
+                _trigger_game_over()
+            else:
+                classd.topleft = (TILE_W, TILE_H * (MAP_H - 3))
+            break
+
 # ---------------------------------
 # Projectiles and shooting
 # ---------------------------------
@@ -1575,6 +1863,20 @@ def update_projectiles():
                 elif p.explosive:
                     do_explosion(p.actor.x, p.actor.y)
                 if not p.piercing and p in projectiles:
+                    projectiles.remove(p)
+                break
+        for boss in boss_zombies[:]:
+            if not boss.dying and p in projectiles and boss.colliderect(p.actor):
+                spawn_spark(p.actor.x, p.actor.y)
+                dmg = 5 if p.piercing else p.damage
+                boss.health -= dmg
+                if boss.health <= 0:
+                    boss.dying      = True
+                    boss.anim_frame = 0
+                    game.money += int(100 * game.coin_multiplier)
+                if p.bomb:
+                    do_bomb_explosion(p.actor.x, p.actor.y)
+                if p in projectiles:
                     projectiles.remove(p)
                 break
 
@@ -1776,12 +2078,16 @@ def on_key_down(key):
     # Restart
     if game.state == "game_over" and key == pygame.K_r:
         game.__init__()
-        zombies[:]        = []
-        fast_zombies[:]   = []
-        tank_zombies[:]   = []
-        police_zombies[:] = []
-        projectiles[:]    = []
-        key_items[:]     = [spawn_key()]
+        zombies[:]          = []
+        fast_zombies[:]     = []
+        tank_zombies[:]     = []
+        police_zombies[:]   = []
+        boss_zombies[:]     = []
+        projectiles[:]      = []
+        boss_projectiles[:] = []
+        boss_hit_effects[:] = []
+        game.boss_level     = 0
+        key_items[:]        = [spawn_key()]
         classd.topleft   = (TILE_W, TILE_H * (MAP_H - 3))
         doctor.topleft   = (TILE_W * 4, TILE_H * 3)
         return
@@ -2030,7 +2336,7 @@ def on_mouse_down(pos):
 
 def update_music():
     try:
-        want = (
+        want = settings.get("music_enabled", True) and (
             game.state in ("mode_select", "menu") or
             (game.state == "playing" and (game.paused or game.shop_open or game.skin_shop_open))
         )
