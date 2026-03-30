@@ -3,17 +3,79 @@
 ---
 
 ## Features Added
-- Two game modes: **Scaperoom** (collect keys, reach the door, avoid the Doctor) and **Survival** (kill all zombies to advance)
-- Four difficulty levels: Easy, Normal, Hard, Nightmare — affect enemy speed and coin rewards
-- Four enemy types: **Zombie** (2 HP), **Fast Zombie** (1 HP), **Tank Zombie** (4 HP, 2 lives damage on hit) **PoliceZombie** (3 HP shoots bullets at player)
-- Four weapons: Regular shot (SPACE), Super shot (N), Shotgun (B), Bomb (V)
-- Explosion system: small explosions for regular/explosive shots (8 frames), large super explosions for bombs (10 frames)
-- Upgrade shop (opens every 5 levels): buy lives, max lives +5, halve cooldowns, 6-shot shotgun, explosive shots, bomb unlock
-- Cosmetic shop (accessible while paused with S): zombie skin, toggle equip/unequip
-- Coin economy: enemies drop coins, used to buy upgrades
-- Level progression: zombies increase in count and speed each wave, tank zombies appear every 3 levels (6 on Easy)
-- Animated explosion visuals drawn from sprite sheets, independent lists per explosion type
-- Bomb projectile: travels in facing direction, triggers large area explosion on impact with zombie or wall
+
+### Game Modes
+- **Scaperoom** — Collect keys, reach the door, avoid the Doctor. Keys increase each wave.
+- **Survival** — Kill all zombies (including boss) to advance. Double zombie limits, 10% faster zombies, no Doctor.
+- **Boss Rush** — Endless boss waves. One new boss spawns every 5 waves. Each boss scales in speed, HP, spawn count, and cooldown every wave until capped at wave 9. No regular zombies, no Doctor, no keys.
+
+### Difficulty
+- Four levels: **Easy**, **Normal**, **Hard**, **Nightmare** — affect enemy speed and coin rewards
+- Difficulty speed multiplier applies to all enemies including the Doctor, Police Zombie projectiles, and Boss Rush bosses
+
+### Enemy Types
+- **Zombie** — 2 HP, 2 damage on hit
+- **Fast Zombie** — 1 HP, 1 damage on hit
+- **Tank Zombie** — 4 HP, 2 damage on hit
+- **Police Zombie** — 3 HP, 1 damage on hit; shoots animated directional projectiles at the player (5 max per cop, 3s cooldown); scales with difficulty
+- **Boss Zombie** (Survival/Scaperoom) — Spawns every 5 levels; scales +5 HP and +0.15 speed per appearance; max 5 minion spawns, 10s cooldown; 100 coins on kill; animated idle/move/die/shoot sprites; 3 damage on contact, 2 damage per projectile; boss health bar at top of screen
+- **Boss Rush Boss** — More powerful variant used in Boss Rush mode; starts at 15 HP and scales to 60 HP over 9 waves; speed caps at 1.3×SCALE; max 4 minion spawns, 12s cooldown; affected by difficulty
+
+### Weapons
+- **Regular shot** `[SPACE]` — 2 damage, 2s cooldown
+- **Super shot** `[N]` — 3 damage, piercing, 15s cooldown; deals 5 damage to bosses and removes piercing
+- **Shotgun** `[B]` — 3-shot spread (or 6-shot with upgrade), 20s cooldown
+- **Bomb** `[V]` — travels in facing direction, large area explosion (13 frames) on impact; unlock via shop
+
+### Projectile Animations
+- All player projectiles are 4-frame animated (directional right/left variants)
+- Police Zombie projectiles are 4-frame animated (directional)
+- Boss projectiles are 30-frame animated (directional)
+
+### Explosion System
+- Small explosion: 8 frames — triggered by regular/explosive shots
+- Large bomb explosion: 13 frames — triggered by bomb impact; larger blast radius
+- Skull, spark, and ring VFX on enemy kills and key pickups
+
+### Shop & Economy
+- **Upgrade shop** opens every 5 levels (pauses game)
+  - Buy life (+1 HP) — 150 coins
+  - Max lives +5 (cap 15) — 800 coins
+  - Halve regular shot cooldown — 600 coins
+  - Halve super shot cooldown — 1000 coins
+  - Halve shotgun cooldown — 800 coins
+  - 6-shot shotgun — 750 coins
+  - Explosive shots — 600 coins
+  - Bomb unlock — 1000 coins
+- **Cosmetic shop** `[S while paused]` — buy and toggle zombie skin
+- Coin drops: Zombie 10, Fast Zombie 20, Tank Zombie 30, Police Zombie 25, Boss 100 (all multiplied by difficulty coin multiplier)
+
+### Settings Panel `[T while paused]`
+- Toggle individual sound effects (shoot, shotgun, explosion, bomb, player hit, key pickup, level up, buy, game over)
+- Toggle visual effects (explosions, bomb explosions, skull, spark, rings)
+- Toggle menu music on/off
+
+### Music & Sound
+- Background music plays on menus and while paused/in shop; stops during active gameplay
+- Music toggleable in settings
+
+### Safe Spawn System
+- All enemies spawn at least 300px (5 tiles) away from the player
+- Spawn loop rerolls until a valid distant tile is found — player is never instantly swarmed
+
+### Boss Health Bar
+- Red bar at top-center of screen, only visible when a live boss is present
+- Uses `max_health` for correct ratio on scaled bosses
+- Stacks vertically for multiple bosses (Boss Rush); shows "BOSS x2", "BOSS x3" etc.
+
+### Controls
+- Move: Arrow keys or WASD
+- Shoot: `SPACE` (regular), `N` (super), `B` (shotgun), `V` (bomb)
+- Pause: `P`
+- Cosmetic shop: `S` (while paused)
+- Settings: `T` (while paused)
+- Shop navigation: `O` (back), `P` (next), `X` (close/continue)
+- Restart after game over: `R`
 
 ---
 
@@ -24,11 +86,9 @@ Requires **Python 3.7+**
 Download: https://www.python.org/downloads/
 
 ### Install dependencies
-Run these commands in your terminal:
-
 ```
-pip install pgzero
 pip install pygame
+pip install pgzero
 ```
 
 ### Run the game
@@ -43,44 +103,21 @@ pgzrun main.py
 
 ---
 
-## Human Errors
-**How readable is the code?**
-Moderate. Functions are clearly named and separated by comment banners, but the file is a single 1100+ line script with no separation into modules. A new reader would need to scan the whole file to understand the structure.
+## Project Notes
 
-**How is the indentation?**
-Inconsistent in places. Most code uses 4-space indentation correctly, but there are several spots with misaligned comments, stray blank lines, and one known leftover triple-assignment of `self.state` in `GameState.__init__` (set to `"playing"`, then `"menu"`, then `"mode_select"` — only the last one matters, the first two are dead code).
+**Code size:** ~2100+ lines in a single file. All game logic, rendering, input, and entity classes live in `main.py`.
 
----
+**Structure:** Divided into clearly labelled sections with `# ---` banners. Main sections: constants, map generation, sound system, image loading, Actor class, entity classes, entity lists, spawning, level progression, update loop, collision, drawing, UI, input.
 
-## Project Problems
-**What does the code want to achieve? How effectively does it do it?**
-A functional top-down zombie survival game with progression, upgrades, and two modes. It achieves this well for a solo project — all core systems work. The main limitation is that everything lives in one file, making it harder to extend as it grows.
+**Image folders:**
+- `images/` — all sprite and VFX assets
+- `BossImages/` — boss-specific sprite sheets (move, idle, die, projectile, hit — right and left variants)
+- `SoundEffects/` — all `.ogg` sound files and `.wav` music
 
-**How large is the code?**
-Approximately 1150 lines in a single file. Manageable now, but will become difficult to navigate if many more features are added.
-
-**Can the code be adapted for other purposes?**
-The map generation, entity/projectile system, and shop framework are generic enough to be reused for other top-down games. The upgrade shop pattern in particular is reusable.
-
-**Are there better alternatives easily available?**
-pgzero is a beginner-friendly framework but has limitations (no built-in sound management, no scene system, no sprite groups). For a larger project, plain pygame or a framework like Arcade would give more control. For this project's scope, pgzero is fine.
+**Extensibility:** Adding a new enemy type requires touching: class definition, entity list, spawn function, draw loop, update loop, collision checks (player + projectile), explosion splash, level progression, and restart cleanup. A base class would reduce this friction.
 
 ---
 
-## Structural Problems
-**How easy is it to add new features?**
-Adding new enemies, weapons, or shop upgrades follows a clear pattern and is straightforward. The main friction is that every new enemy type requires touching 8+ places in the code (class definition, list, draw, update, collision, projectile hit, explosion splash, spawn function, level progression, restart cleanup). A base class or component system would reduce this.
+## Security
 
-**How easy is the code to read?**
-Section banners (`# ---`) help a lot. However, `on_mouse_down` and `draw_shop` are long and repetitive — each new shop page adds another block of nearly identical code. `GameState.__init__` has three redundant `self.state =` assignments that should be cleaned up. The variable name `mim_fast_zombies` is a typo of `min_fast_zombies`.
-
----
-
-## Security Problems
-**How could bad actors exploit flaws in the code?**
-This is a local single-player game with no networking, no file I/O beyond image loading, and no user-generated input processed as code. There is no meaningful attack surface.
-
-**How could the code be used outside its original purpose?**
-It cannot. It is a self-contained game script with no external APIs, no data collection, and no network calls. It is not adaptable for malicious use.
-
----
+This is a local single-player game with no networking, no user-generated input processed as code, and no external API calls. There is no meaningful attack surface and no adaptable malicious use.
