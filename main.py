@@ -382,6 +382,21 @@ for _i in range(1, 14):
         _ow // 2, _oh // 2
     ))
 
+def _cache_bullet_frames(base_name):
+    frames = []
+    for _i in range(1, 5):
+        _img = load_image(base_name + str(_i))
+        _ow, _oh = _img.get_size()
+        frames.append(pygame.transform.scale(_img, (int(_ow * SCALE), int(_oh * SCALE))))
+    return frames
+
+_proj_regular_right_frames = _cache_bullet_frames("meteorsmall")
+_proj_regular_left_frames  = _cache_bullet_frames("meteorsmallleft")
+_proj_super_right_frames   = _cache_bullet_frames("meteor")
+_proj_super_left_frames    = _cache_bullet_frames("meteorleft")
+_cop_bullet_right_frames   = _cache_bullet_frames("coppbullet")
+_cop_bullet_left_frames    = _cache_bullet_frames("coppbulletleft")
+
 _skull_frames = []
 for _i in range(1, 30):
     _img     = load_image("skull" + str(_i))
@@ -499,16 +514,19 @@ game = GameState()
 
 class Projectile(object):
     def __init__(self, x, y, direction, super_shot, vy=0):
-        self.direction = direction
-        self.vy        = vy
+        self.direction        = direction
+        self.vy               = vy
+        self.super_shot       = super_shot
+        self.bullet_frame     = 0
+        self.bullet_frame_timer = 0.0
         if super_shot:
-            self.actor    = Actor("meteor", center=(x, y))
+            self.actor    = Actor("meteor1", center=(x, y))
             self.speed    = SUPER_PROJECTILE_SPEED
             self.damage   = 3
             self.piercing = True
             self.explosive = False
         else:
-            self.actor    = Actor("meteorsmall", center=(x, y))
+            self.actor    = Actor("meteorsmall1", center=(x, y))
             self.speed    = PROJECTILE_SPEED
             self.damage   = 2
             self.piercing = False
@@ -521,12 +539,23 @@ class Projectile(object):
         else:
             self.actor.x -= self.speed
         self.actor.y += self.vy
+        self.bullet_frame_timer += 0.15
+        if self.bullet_frame_timer >= 1.0:
+            self.bullet_frame_timer -= 1.0
+            self.bullet_frame = (self.bullet_frame + 1) % 4
 
     def draw(self):
         if self.bomb:
             draw_bomb_projectile(self.actor)
         else:
-            draw_scaled(self.actor)
+            if self.super_shot:
+                frames = _proj_super_right_frames if self.direction == "right" else _proj_super_left_frames
+            else:
+                frames = _proj_regular_right_frames if self.direction == "right" else _proj_regular_left_frames
+            surf = frames[self.bullet_frame]
+            cx   = int(self.actor.x)
+            cy   = int(self.actor.y)
+            screen.blit(surf, (cx - surf.get_width() // 2, cy - surf.get_height() // 2))
 
     def is_offscreen(self):
         return (self.actor.right < 0 or self.actor.left > WIDTH or
@@ -634,17 +663,28 @@ class TankZombie(object):
 
 class PoliceZombieProjectile(object):
     def __init__(self, x, y, dx, dy, speed):
-        self.actor = Actor("bullet", center=(x, y))
-        self.dx    = dx
-        self.dy    = dy
-        self.speed = speed
+        self.actor            = Actor("coppbullet1", center=(x, y))
+        self.dx               = dx
+        self.dy               = dy
+        self.speed            = speed
+        self.facing           = "right" if dx >= 0 else "left"
+        self.bullet_frame     = 0
+        self.bullet_frame_timer = 0.0
 
     def move(self):
         self.actor.x += self.dx * self.speed
         self.actor.y += self.dy * self.speed
+        self.bullet_frame_timer += 0.15
+        if self.bullet_frame_timer >= 1.0:
+            self.bullet_frame_timer -= 1.0
+            self.bullet_frame = (self.bullet_frame + 1) % 4
 
     def draw(self):
-        draw_scaled(self.actor)
+        frames = _cop_bullet_right_frames if self.facing == "right" else _cop_bullet_left_frames
+        surf   = frames[self.bullet_frame]
+        cx     = int(self.actor.x)
+        cy     = int(self.actor.y)
+        screen.blit(surf, (cx - surf.get_width() // 2, cy - surf.get_height() // 2))
 
     def is_offscreen(self):
         return (self.actor.right < 0 or self.actor.left > WIDTH or
@@ -1466,7 +1506,7 @@ def check_collisions():
 def update_projectiles():
     for p in projectiles[:]:
         p.move()
-        if p.actor.colliderect(doctor) or p.is_offscreen():
+        if (game.mode == "scaperoom" and p.actor.colliderect(doctor)) or p.is_offscreen():
             if p.bomb:
                 do_bomb_explosion(p.actor.x, p.actor.y)
             projectiles.remove(p)
