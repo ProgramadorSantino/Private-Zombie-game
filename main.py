@@ -374,7 +374,7 @@ for _i in range(1, 9):
     ))
 
 _bomb_explosion_frames = []
-for _i in range(1, 11):
+for _i in range(1, 14):
     _img    = load_image("superexplosion" + str(_i))
     _ow, _oh = _img.get_size()
     _bomb_explosion_frames.append((
@@ -1589,7 +1589,7 @@ def do_bomb_explosion(px, py):
     if settings["vfx_bomb_explosion"]:
         bomb_explosions.append([px, py, 0, 0.0])
     play_sound("snd_bomb")
-    radius = 2 * TILE_W * 3.5
+    radius = 2 * TILE_W * 4.5
     for z in zombies[:]:
         if ((z.actor.x - px) ** 2 + (z.actor.y - py) ** 2) ** 0.5 <= radius:
             z.health -= 2
@@ -1626,7 +1626,7 @@ def update_bomb_explosions(dt):
         if e[3] >= 0.06:
             e[3] -= 0.06
             e[2] += 1
-        if e[2] >= 10:
+        if e[2] >= 13:
             bomb_explosions.remove(e)
 
 
