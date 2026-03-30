@@ -6,6 +6,12 @@ import pygame
 pygame.init()
 pygame.mixer.init()
 
+try:
+    pygame.mixer.music.load("SoundEffects/PauseMenuMusic.wav")
+    pygame.mixer.music.set_volume(0.4)
+except Exception:
+    pass
+
 # ---------------------------------
 # Constants
 # ---------------------------------
@@ -2022,6 +2028,22 @@ def on_mouse_down(pos):
 # Main game loop
 # ---------------------------------
 
+def update_music():
+    try:
+        want = (
+            game.state in ("mode_select", "menu") or
+            (game.state == "playing" and (game.paused or game.shop_open or game.skin_shop_open))
+        )
+        if want:
+            if not pygame.mixer.music.get_busy():
+                pygame.mixer.music.play(-1)
+        else:
+            if pygame.mixer.music.get_busy():
+                pygame.mixer.music.stop()
+    except Exception:
+        pass
+
+
 while True:
     dt = clock.tick(FPS) / 1000.0
 
@@ -2035,6 +2057,7 @@ while True:
             if event.button == 1:
                 on_mouse_down(event.pos)
 
+    update_music()
     update(dt)
     draw()
     pygame.display.flip()
