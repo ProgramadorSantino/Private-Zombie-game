@@ -5,7 +5,7 @@
 ## Features Added
 - Two game modes: **Scaperoom** (collect keys, reach the door, avoid the Doctor) and **Survival** (kill all zombies to advance)
 - Four difficulty levels: Easy, Normal, Hard, Nightmare — affect enemy speed and coin rewards
-- Three enemy types: **Zombie** (2 HP), **Fast Zombie** (1 HP), **Tank Zombie** (3 HP, 2 lives damage on hit)
+- Four enemy types: **Zombie** (2 HP), **Fast Zombie** (1 HP), **Tank Zombie** (4 HP, 2 lives damage on hit) **PoliceZombie** (3 HP shoots bullets at player)
 - Four weapons: Regular shot (SPACE), Super shot (N), Shotgun (B), Bomb (V)
 - Explosion system: small explosions for regular/explosive shots (8 frames), large super explosions for bombs (10 frames)
 - Upgrade shop (opens every 5 levels): buy lives, max lives +5, halve cooldowns, 6-shot shotgun, explosive shots, bomb unlock
