@@ -24,7 +24,7 @@ ZOMBIE_MAX      = 20
 FAST_ZOMBIE_MAX = 10
 TANK_ZOMBIE_MAX = 7
 
-LEVEL_REWARD = 50
+LEVEL_REWARD = 67676
 COLOR_TEXT   = "white"
 
 # --- Shop Constants ---
@@ -32,7 +32,7 @@ SKIN_COST            = 1000
 LEVELS_FOR_SHOP      = 5
 REGULAR_HALVED_COST  = 600
 SUPER_HALVED_COST    = 1000
-SHOP_PAGES           = 5
+SHOP_PAGES           = 8
 SKIN_SHOP_PAGES      = 5
 SHOTGUN_HALVED_COST  = 800
 SHOTGUN_SIX_COST     = 750
@@ -40,6 +40,11 @@ EXPLOSIVE_COST       = 600
 LIFE_COST            = 150
 MAX_LIFE_COST        = 800
 BOMB_COST            = 1000
+SUPER_RICOCHET_COST  = 1200
+TIME_BURST_COST      = 1000
+SHIELD_COST          = 1000
+TIME_BURST_DURATION  = 3.0   # seconds active
+TIME_BURST_COOLDOWN  = 30.0  # seconds between uses
 
 SETTINGS_NUM_PAGES = 6
 
@@ -154,6 +159,19 @@ def _trigger_game_over():
     _save_progress()
     game.state = "game_over"
     play_sound("snd_game_over")
+
+def _apply_hit(damage):
+    """Apply damage to shield first, then lives. Returns True if game over."""
+    if game.shield_hp > 0:
+        absorbed       = min(damage, game.shield_hp)
+        game.shield_hp -= absorbed
+        damage         -= absorbed
+    if damage > 0:
+        game.lives -= damage
+        if game.lives <= 0:
+            _trigger_game_over()
+            return True
+    return False
 
 # ---------------------------------
 # Image loading (convert_alpha safe after display creation)
@@ -485,6 +503,7 @@ DIFFICULTY_SETTINGS = {
 
 zombie_skin_icon = Actor("classdzombie")
 life_heart_icon  = Actor("heart")
+shield_icon      = Actor("ShieldImage.png")
 _bomb_draw_actor = Actor("bombpixelart")   # visual only, never moved
 
 shop_reg_rect            = pygame.Rect(0, 0, 260, 50)
@@ -494,6 +513,9 @@ shop_shotgun_six_rect    = pygame.Rect(0, 0, 260, 50)
 shop_explosive_rect      = pygame.Rect(0, 0, 260, 50)
 shop_maxlife_rect        = pygame.Rect(0, 0, 260, 50)
 shop_bomb_rect           = pygame.Rect(0, 0, 260, 50)
+shop_ricochet_rect       = pygame.Rect(0, 0, 260, 50)
+shop_time_burst_rect     = pygame.Rect(0, 0, 260, 50)
+shop_shield_rect         = pygame.Rect(0, 0, 260, 50)
 
 # ---------------------------------
 # Game State
@@ -542,8 +564,17 @@ class GameState(object):
         self.bomb_unlocked      = False
         self.bomb_ready         = True
         self.last_bomb          = 0
-        self.BOMB_COOLDOWN      = 50.0
-        self.boss_level         = 0
+        self.BOMB_COOLDOWN          = 50.0
+        self.boss_level             = 0
+        self.super_ricochet         = False
+        self.time_burst_unlocked    = False
+        self.time_burst_active      = False
+        self.time_burst_timer       = 0.0
+        self.time_burst_ready       = True
+        self.last_time_burst        = 0
+        self.shield_unlocked        = False
+        self.shield_hp              = 0
+        self.shield_max             = 3
 
 game = GameState()
 
@@ -606,17 +637,19 @@ class Projectile(object):
         self.bullet_frame     = 0
         self.bullet_frame_timer = 0.0
         if super_shot:
-            self.actor    = Actor("meteor1", center=(x, y))
-            self.speed    = SUPER_PROJECTILE_SPEED
-            self.damage   = 3
-            self.piercing = True
+            self.actor     = Actor("meteor1", center=(x, y))
+            self.speed     = SUPER_PROJECTILE_SPEED
+            self.damage    = 3
+            self.piercing  = True
             self.explosive = False
+            self.ricochets = 2 if game.super_ricochet else 0
         else:
-            self.actor    = Actor("meteorsmall1", center=(x, y))
-            self.speed    = PROJECTILE_SPEED
-            self.damage   = 2
-            self.piercing = False
+            self.actor     = Actor("meteorsmall1", center=(x, y))
+            self.speed     = PROJECTILE_SPEED
+            self.damage    = 2
+            self.piercing  = False
             self.explosive = game.explosive_shots
+            self.ricochets = 0
         self.bomb = False
 
     def move(self):
@@ -625,6 +658,15 @@ class Projectile(object):
         else:
             self.actor.x -= self.speed
         self.actor.y += self.vy
+        if self.ricochets > 0:
+            if self.actor.right >= WIDTH:
+                self.actor.right = WIDTH - 1
+                self.direction   = "left"
+                self.ricochets  -= 1
+            elif self.actor.left <= 0:
+                self.actor.left = 1
+                self.direction  = "right"
+                self.ricochets -= 1
         self.bullet_frame_timer += 0.15
         if self.bullet_frame_timer >= 1.0:
             self.bullet_frame_timer -= 1.0
@@ -1222,6 +1264,82 @@ def draw_shop():
             draw_text("Bomb [V]  -" + str(BOMB_COST) + " coins",
                       center=shop_bomb_rect.center, fontsize=20, color=color_b)
 
+    # ---- PAGE 5: Ricochet (Super Shot upgrade) ----
+    elif game.shop_page == 5:
+        draw_text("Super Shot Upgrade",
+                  center=(WIDTH // 2, HEIGHT // 2 - 65),
+                  fontsize=22, color="cyan")
+        draw_text("Shot bounces off walls once,",
+                  center=(WIDTH // 2, HEIGHT // 2 - 42),
+                  fontsize=17, color="grey")
+        draw_text("still piercing on return trip.",
+                  center=(WIDTH // 2, HEIGHT // 2 - 24),
+                  fontsize=17, color="grey")
+        shop_ricochet_rect.topleft = (WIDTH // 2 - 130, HEIGHT // 2 + 5)
+        shop_ricochet_rect.size    = (260, 50)
+        if game.super_ricochet:
+            draw_filled_rect(shop_ricochet_rect, (0, 60, 80))
+            draw_rect_outline(shop_ricochet_rect, "cyan")
+            draw_text("Ricochet [N] (owned)",
+                      center=shop_ricochet_rect.center, fontsize=20, color="cyan")
+        else:
+            col = (0, 40, 60) if game.money >= SUPER_RICOCHET_COST else (60, 0, 0)
+            draw_filled_rect(shop_ricochet_rect, col)
+            draw_rect_outline(shop_ricochet_rect, "white")
+            color_rc = "cyan" if game.money >= SUPER_RICOCHET_COST else "red"
+            draw_text("Ricochet  -" + str(SUPER_RICOCHET_COST) + " coins",
+                      center=shop_ricochet_rect.center, fontsize=20, color=color_rc)
+
+    # ---- PAGE 6: Time Burst ----
+    elif game.shop_page == 6:
+        draw_text("New Ability: Time Burst [C]",
+                  center=(WIDTH // 2, HEIGHT // 2 - 65),
+                  fontsize=22, color=(100, 200, 255))
+        draw_text("Slows all enemies to 25% speed",
+                  center=(WIDTH // 2, HEIGHT // 2 - 42),
+                  fontsize=17, color="grey")
+        draw_text("for 3 seconds.  30s cooldown.",
+                  center=(WIDTH // 2, HEIGHT // 2 - 24),
+                  fontsize=17, color="grey")
+        shop_time_burst_rect.topleft = (WIDTH // 2 - 130, HEIGHT // 2 + 5)
+        shop_time_burst_rect.size    = (260, 50)
+        if game.time_burst_unlocked:
+            draw_filled_rect(shop_time_burst_rect, (0, 40, 80))
+            draw_rect_outline(shop_time_burst_rect, (100, 200, 255))
+            draw_text("Time Burst [C] (owned)",
+                      center=shop_time_burst_rect.center, fontsize=20, color=(100, 200, 255))
+        else:
+            col = (0, 25, 60) if game.money >= TIME_BURST_COST else (60, 0, 0)
+            draw_filled_rect(shop_time_burst_rect, col)
+            draw_rect_outline(shop_time_burst_rect, "white")
+            color_tb = (100, 200, 255) if game.money >= TIME_BURST_COST else "red"
+            draw_text("Time Burst  -" + str(TIME_BURST_COST) + " coins",
+                      center=shop_time_burst_rect.center, fontsize=20, color=color_tb)
+
+    # ---- PAGE 7: Shield ----
+    elif game.shop_page == 7:
+        shield_icon.center = (WIDTH // 2, HEIGHT // 2 - 20)
+        draw_scaled(shield_icon)
+
+        if game.shield_unlocked:
+            draw_text("Shield (owned)  " + str(game.shield_hp) + "/" + str(game.shield_max) + " HP",
+                      center=(WIDTH // 2, HEIGHT // 2 + 30),
+                      fontsize=22, color="cyan")
+            draw_text("Replenishes 1 HP every 3 waves",
+                      center=(WIDTH // 2, HEIGHT // 2 + 52),
+                      fontsize=17, color="grey")
+        else:
+            color_sh = "cyan" if game.money >= SHIELD_COST else "red"
+            draw_text("Shield  -" + str(SHIELD_COST) + " coins",
+                      center=(WIDTH // 2, HEIGHT // 2 + 30),
+                      fontsize=22, color=color_sh)
+            draw_text("Absorbs 3 damage  |  +1 HP every 3 waves",
+                      center=(WIDTH // 2, HEIGHT // 2 + 52),
+                      fontsize=17, color="grey")
+            draw_text("(Click to buy)",
+                      center=(WIDTH // 2, HEIGHT // 2 + 72),
+                      fontsize=18, color="white")
+
 
 # ---------------------------------
 # Cosmetic shop drawing
@@ -1376,6 +1494,9 @@ def draw():
         surf = _boss_hit_frames[e[2]]
         screen.blit(surf, (int(e[0]) - surf.get_width() // 2, int(e[1]) - surf.get_height() // 2))
 
+    if game.time_burst_active:
+        draw_filled_rect(pygame.Rect(0, 0, WIDTH, HEIGHT), (0, 60, 180, 40))
+
     if game.skin_shop_open:
         draw_skin_shop()
         return
@@ -1464,11 +1585,28 @@ def draw_ui():
         sup_text  = "Super [N]: {:.1f}s".format(sup_rem)
         sup_color = "orange"
 
+    if game.shield_unlocked:
+        shield_color = "cyan" if game.shield_hp > 0 else (100, 100, 100)
+        draw_text("Shield: " + str(game.shield_hp) + "/" + str(game.shield_max),
+                  topleft=(10, 95), fontsize=24, color=shield_color)
     if game.bomb_unlocked:
-        draw_text(bomb_text, topleft=(10, 100), fontsize=24, color=bomb_color)
-    draw_text(sho_text, topleft=(10, 125), fontsize=24, color=sho_color)
-    draw_text(sup_text, topleft=(10, 150), fontsize=24, color=sup_color)
-    draw_text(reg_text, topleft=(10, 175), fontsize=24, color=reg_color)
+        draw_text(bomb_text, topleft=(10, 120), fontsize=24, color=bomb_color)
+    draw_text(sho_text, topleft=(10, 145), fontsize=24, color=sho_color)
+    draw_text(sup_text, topleft=(10, 170), fontsize=24, color=sup_color)
+    draw_text(reg_text, topleft=(10, 195), fontsize=24, color=reg_color)
+    if game.time_burst_unlocked:
+        if game.time_burst_active:
+            tb_rem   = max(0.0, TIME_BURST_DURATION - game.time_burst_timer)
+            tb_text  = "Time Burst [C]: {:.1f}s".format(tb_rem)
+            tb_color = (100, 200, 255)
+        elif game.time_burst_ready:
+            tb_text  = "Time Burst [C]: READY"
+            tb_color = (100, 200, 255)
+        else:
+            tb_rem   = max(0.0, TIME_BURST_COOLDOWN - (time.time() - game.last_time_burst))
+            tb_text  = "Time Burst [C]: {:.1f}s".format(tb_rem)
+            tb_color = (60, 120, 180)
+        draw_text(tb_text, topleft=(10, 220), fontsize=24, color=tb_color)
 
     alive_bosses = [b for b in boss_zombies if not b.dying]
     if alive_bosses:
@@ -1709,6 +1847,9 @@ def next_level():
     _earn(int(LEVEL_REWARD * game.coin_multiplier))
     play_sound("snd_level_up")
 
+    if game.shield_unlocked and game.shield_hp < game.shield_max and game.score % 3 == 0:
+        game.shield_hp += 1
+
     if game.score % LEVELS_FOR_SHOP == 0:
         game.shop_open = True
         game.paused    = True
@@ -1801,9 +1942,12 @@ def actual_level_progression():
 # ---------------------------------
 
 def update_boss_zombies(dt):
+    mult = 0.25 if game.time_burst_active else 1.0
     for boss in boss_zombies[:]:
         if not boss.dying:
+            saved = boss.speed; boss.speed *= mult
             boss.move(classd)
+            boss.speed = saved
         boss.update(dt)
         if boss.dying and boss.die_frame >= 32:
             boss_zombies.remove(boss)
@@ -1842,6 +1986,15 @@ def update(dt):
         game.shotgun_ready = True
     if not game.bomb_ready    and now - game.last_bomb    >= game.BOMB_COOLDOWN:
         game.bomb_ready    = True
+    if game.time_burst_active:
+        game.time_burst_timer += dt
+        if game.time_burst_timer >= TIME_BURST_DURATION:
+            game.time_burst_active = False
+            game.time_burst_timer  = 0.0
+            game.time_burst_ready  = False
+            game.last_time_burst   = now
+    if not game.time_burst_ready and now - game.last_time_burst >= TIME_BURST_COOLDOWN:
+        game.time_burst_ready = True
 
     move_doctor()
     update_zombies()
@@ -1892,14 +2045,23 @@ def move_doctor():
 
 
 def update_zombies():
+    mult = 0.25 if game.time_burst_active else 1.0
     for z in zombies:
+        saved = z.speed; z.speed *= mult
         z.move(classd)
+        z.speed = saved
     for z in fast_zombies:
+        saved = z.speed; z.speed *= mult
         z.move(classd)
+        z.speed = saved
     for z in tank_zombies:
+        saved = z.speed; z.speed *= mult
         z.move(classd)
+        z.speed = saved
     for z in police_zombies:
+        saved = z.speed; z.speed *= mult
         z.move(classd)
+        z.speed = saved
         z.try_shoot(classd)
         z.update_projectiles()
 
@@ -1914,55 +2076,40 @@ def check_collisions():
 
     for z in zombies[:]:
         if classd.colliderect(z.actor):
-            game.lives -= 1
             play_sound("snd_player_hit")
-            if game.lives <= 0:
-                _trigger_game_over()
-            else:
+            if not _apply_hit(1):
                 classd.topleft = (TILE_W, TILE_H * (MAP_H - 3))
                 zombies.remove(z)
             break
 
     for z in fast_zombies[:]:
         if classd.colliderect(z.actor):
-            game.lives -= 1
             play_sound("snd_player_hit")
-            if game.lives <= 0:
-                _trigger_game_over()
-            else:
+            if not _apply_hit(1):
                 classd.topleft = (TILE_W, TILE_H * (MAP_H - 3))
                 fast_zombies.remove(z)
             break
 
     for z in tank_zombies[:]:
         if classd.colliderect(z.actor):
-            game.lives -= 2
             play_sound("snd_player_hit")
-            if game.lives <= 0:
-                _trigger_game_over()
-            else:
+            if not _apply_hit(2):
                 classd.topleft = (TILE_W, TILE_H * (MAP_H - 3))
                 tank_zombies.remove(z)
             break
 
     for z in police_zombies[:]:
         if classd.colliderect(z.actor):
-            game.lives -= 1
             play_sound("snd_player_hit")
-            if game.lives <= 0:
-                _trigger_game_over()
-            else:
+            if not _apply_hit(1):
                 classd.topleft = (TILE_W, TILE_H * (MAP_H - 3))
                 police_zombies.remove(z)
             break
         for p in z.projectiles[:]:
             if classd.colliderect(p.actor):
                 z.projectiles.remove(p)
-                game.lives -= 1
                 play_sound("snd_player_hit")
-                if game.lives <= 0:
-                    _trigger_game_over()
-                else:
+                if not _apply_hit(1):
                     classd.topleft = (TILE_W, TILE_H * (MAP_H - 3))
                 break
 
@@ -1970,21 +2117,15 @@ def check_collisions():
         if bp.colliderect(classd):
             boss_projectiles.remove(bp)
             boss_hit_effects.append([bp.x, bp.y, 0, 0.0])
-            game.lives -= 2
             play_sound("snd_player_hit")
-            if game.lives <= 0:
-                _trigger_game_over()
-            else:
+            if not _apply_hit(2):
                 classd.topleft = (TILE_W, TILE_H * (MAP_H - 3))
             break
 
     for boss in boss_zombies[:]:
         if not boss.dying and boss.colliderect(classd):
-            game.lives -= 3
             play_sound("snd_player_hit")
-            if game.lives <= 0:
-                _trigger_game_over()
-            else:
+            if not _apply_hit(3):
                 classd.topleft = (TILE_W, TILE_H * (MAP_H - 3))
             break
 
@@ -2406,6 +2547,10 @@ def on_key_down(key):
         shoot_bomb()
         game.bomb_ready = False
         game.last_bomb  = time.time()
+    elif (key == pygame.K_c and game.time_burst_unlocked
+            and game.time_burst_ready and not game.time_burst_active):
+        game.time_burst_active = True
+        game.time_burst_timer  = 0.0
 
 # ---------------------------------
 # Mouse / shop input
@@ -2551,6 +2696,45 @@ def on_mouse_down(pos):
                 print("Bomb unlocked.")
             elif game.bomb_unlocked:
                 print("Already purchased.")
+            else:
+                print("Insufficient coins.")
+
+    elif game.shop_page == 5:
+        if shop_ricochet_rect.collidepoint(*p):
+            if not game.super_ricochet and game.money >= SUPER_RICOCHET_COST:
+                game.money           -= SUPER_RICOCHET_COST
+                game.super_ricochet   = True
+                game.SUPER_COOLDOWN   = 10.0 if game.super_halved else 20.0
+                play_sound("snd_buy")
+                print("Ricochet unlocked.")
+            elif game.super_ricochet:
+                print("Already purchased.")
+            else:
+                print("Insufficient coins.")
+
+    elif game.shop_page == 6:
+        if shop_time_burst_rect.collidepoint(*p):
+            if not game.time_burst_unlocked and game.money >= TIME_BURST_COST:
+                game.money               -= TIME_BURST_COST
+                game.time_burst_unlocked  = True
+                play_sound("snd_buy")
+                print("Time Burst unlocked.")
+            elif game.time_burst_unlocked:
+                print("Already purchased.")
+            else:
+                print("Insufficient coins.")
+
+    elif game.shop_page == 7:
+        shield_icon.center = (WIDTH // 2, HEIGHT // 2 - 20)
+        if shield_icon.collidepoint(*p):
+            if not game.shield_unlocked and game.money >= SHIELD_COST:
+                game.money           -= SHIELD_COST
+                game.shield_unlocked  = True
+                game.shield_hp        = game.shield_max
+                play_sound("snd_buy")
+                print("Shield activated.")
+            elif game.shield_unlocked:
+                print("Shield already active.")
             else:
                 print("Insufficient coins.")
 
