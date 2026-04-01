@@ -2,6 +2,7 @@ import random
 import time
 import sys
 import pygame
+import save_data
 
 pygame.init()
 pygame.mixer.init()
@@ -80,6 +81,7 @@ settings = {
 }
 settings_open = False
 settings_page = 0
+stats_open    = False
 
 # ---------------------------------
 # Map Generation
@@ -148,6 +150,8 @@ def play_sound(name):
         pass
 
 def _trigger_game_over():
+    _update_high_score()
+    _save_progress()
     game.state = "game_over"
     play_sound("snd_game_over")
 
@@ -543,6 +547,53 @@ class GameState(object):
 
 game = GameState()
 
+skin_coins  = 0   # persists across game resets; earns at half the rate of money
+kill_stats  = {"zombie": 0, "fast": 0, "tank": 0, "police": 0, "boss": 0}
+high_scores = {}  # key: "mode_difficulty", value: max wave (score)
+
+def _earn(amount):
+    global skin_coins
+    game.money  += amount
+    skin_coins  += amount // 2
+
+def _kill(enemy_type, coins):
+    """Award coins for a kill and increment the persistent kill counter."""
+    global kill_stats
+    _earn(coins)
+    kill_stats[enemy_type] = kill_stats.get(enemy_type, 0) + 1
+
+def _update_high_score():
+    """Record the current run's score if it's a new best for this mode+difficulty."""
+    key = game.mode + "_" + game.difficulty
+    if game.score > high_scores.get(key, 0):
+        high_scores[key] = game.score
+
+def _save_progress():
+    save_data.save(skin_coins, game.skin_unlocked, using_skin, settings,
+                   kill_stats, high_scores)
+
+def _go_to_menu():
+    """Save progress and return to the mode-select / main menu screen."""
+    global stats_open, settings_open
+    _update_high_score()
+    _save_progress()
+    stats_open    = False
+    settings_open = False
+    _was_unlocked = game.skin_unlocked
+    game.__init__()
+    game.skin_unlocked  = _was_unlocked
+    zombies[:]          = []
+    fast_zombies[:]     = []
+    tank_zombies[:]     = []
+    police_zombies[:]   = []
+    boss_zombies[:]     = []
+    projectiles[:]      = []
+    boss_projectiles[:] = []
+    boss_hit_effects[:] = []
+    key_items[:]        = []
+    classd.topleft      = (TILE_W, TILE_H * (MAP_H - 3))
+    doctor.topleft      = (TILE_W * 4, TILE_H * 3)
+
 # ---------------------------------
 # Projectile class
 # ---------------------------------
@@ -607,6 +658,16 @@ PLAYER_ZOMBIE_FLIPPED = "classdzombieflipped"
 
 using_skin = False
 
+# --- Restore persistent data from disk (overwrites defaults above) ---
+_sd = save_data.load()
+skin_coins         = _sd["skin_coins"]
+game.skin_unlocked = _sd["skin_unlocked"]
+using_skin         = _sd["using_skin"]
+settings.update(_sd["settings"])
+kill_stats.update(_sd["kill_stats"])
+high_scores.update(_sd["high_scores"])
+del _sd
+
 classd = Actor(PLAYER_DEFAULT)
 classd.topleft = (TILE_W, TILE_H * (MAP_H - 3))
 
@@ -617,6 +678,8 @@ def update_player_sprite():
         classd.image = PLAYER_ZOMBIE if facing == "right" else PLAYER_ZOMBIE_FLIPPED
     else:
         classd.image = PLAYER_DEFAULT if facing == "right" else PLAYER_FLIPPED
+
+update_player_sprite()  # apply loaded skin state immediately
 
 # ---------------------------------
 # Door and Doctor
@@ -1181,7 +1244,7 @@ def draw_skin_shop():
     draw_text("Press X to Close",
               center=(WIDTH // 2, HEIGHT // 2 + 110),
               fontsize=22, color="white", ocolor="black")
-    draw_text("Coins: " + str(game.money),
+    draw_text("Skin Coins: " + str(skin_coins),
               center=(WIDTH // 2, HEIGHT // 2 - 80),
               fontsize=30, color="yellow", shadow=(1, 1))
 
@@ -1198,8 +1261,8 @@ def draw_skin_shop():
                       center=(WIDTH // 2, HEIGHT // 2 + 52),
                       fontsize=18, color="white")
         else:
-            color_s = "green" if game.money >= SKIN_COST else "red"
-            draw_text("Zombie Skin  -" + str(SKIN_COST) + " coins",
+            color_s = "green" if skin_coins >= SKIN_COST else "red"
+            draw_text("Zombie Skin  -" + str(SKIN_COST) + " skin coins",
                       center=(WIDTH // 2, HEIGHT // 2 + 30),
                       fontsize=22, color=color_s)
             draw_text("(Click to buy)",
@@ -1330,6 +1393,16 @@ def draw():
         draw_text("[T] Settings",
                   center=(WIDTH // 2, HEIGHT // 2 + 100),
                   fontsize=24, color="cyan")
+        draw_text("[K] Statistics",
+                  center=(WIDTH // 2, HEIGHT // 2 + 130),
+                  fontsize=24, color="yellow")
+        draw_text("[M] Main Menu",
+                  center=(WIDTH // 2, HEIGHT // 2 + 160),
+                  fontsize=24, color="orange")
+
+    if stats_open:
+        draw_stats()
+        return
 
     if settings_open:
         draw_settings()
@@ -1469,6 +1542,76 @@ def draw_settings():
                   fontsize=30, color="grey")
 
 # ---------------------------------
+# Stats overlay
+# ---------------------------------
+
+_MODE_NAMES = {"scaperoom": "Scaperoom", "survival": "Survival", "bossrush": "Boss Rush"}
+_DIFF_NAMES = {"easy": "Easy", "normal": "Normal", "hard": "Hard", "nightmare": "Nightmare"}
+
+def draw_stats():
+    pw = 460
+    ph = 450
+    px = WIDTH  // 2 - pw // 2
+    py = HEIGHT // 2 - ph // 2
+
+    draw_filled_rect(pygame.Rect(px, py, pw, ph), (0, 0, 0, 220))
+    draw_rect_outline(pygame.Rect(px, py, pw, ph), "yellow")
+
+    draw_text("Statistics",
+              center=(WIDTH // 2, py + 24),
+              fontsize=34, color="yellow", shadow=(1, 1))
+    draw_text("Press K or X to Close",
+              center=(WIDTH // 2, py + ph - 20),
+              fontsize=18, color="white", ocolor="black")
+
+    # --- Kill counts ---
+    draw_text("Kill Counts",
+              center=(WIDTH // 2, py + 66),
+              fontsize=20, color="grey")
+
+    kills = [
+        ("Zombies",         kill_stats.get("zombie",  0), "green"),
+        ("Fast Zombies",    kill_stats.get("fast",    0), "cyan"),
+        ("Tank Zombies",    kill_stats.get("tank",    0), "orange"),
+        ("Police Zombies",  kill_stats.get("police",  0), (100, 160, 255)),
+        ("Boss Zombies",    kill_stats.get("boss",    0), "red"),
+    ]
+    lx = px + 30
+    rx = px + pw - 30
+    for i, (label, count, color) in enumerate(kills):
+        y = py + 92 + i * 30
+        draw_text(label + ":", topleft=(lx, y), fontsize=20, color="white")
+        draw_text(str(count),  topleft=(rx - len(str(count)) * 12, y),
+                  fontsize=20, color=color)
+
+    # --- High scores ---
+    draw_text("Best Wave per Mode",
+              center=(WIDTH // 2, py + 252),
+              fontsize=20, color="grey")
+
+    entries = []
+    for mode in ("scaperoom", "survival", "bossrush"):
+        for diff in ("easy", "normal", "hard", "nightmare"):
+            key   = mode + "_" + diff
+            score = high_scores.get(key, 0)
+            if score > 0:
+                entries.append((_MODE_NAMES[mode], _DIFF_NAMES[diff], score))
+    entries.sort(key=lambda e: -e[2])  # best first
+
+    if not entries:
+        draw_text("No runs completed yet.",
+                  center=(WIDTH // 2, py + 290),
+                  fontsize=20, color="grey")
+    else:
+        for i, (mname, dname, score) in enumerate(entries[:7]):
+            y = py + 278 + i * 26
+            draw_text(mname + "  " + dname + ":",
+                      topleft=(lx, y), fontsize=18, color="white")
+            draw_text("Wave " + str(score + 1),
+                      topleft=(rx - 90, y), fontsize=18, color="yellow")
+
+
+# ---------------------------------
 # Spawning
 # ---------------------------------
 
@@ -1563,7 +1706,7 @@ def spawn_rush_boss(rush_level):
 
 def next_level():
     game.score += 1
-    game.money += int(LEVEL_REWARD * game.coin_multiplier)
+    _earn(int(LEVEL_REWARD * game.coin_multiplier))
     play_sound("snd_level_up")
 
     if game.score % LEVELS_FOR_SHOP == 0:
@@ -1771,7 +1914,7 @@ def check_collisions():
 
     for z in zombies[:]:
         if classd.colliderect(z.actor):
-            game.lives -= 2
+            game.lives -= 1
             play_sound("snd_player_hit")
             if game.lives <= 0:
                 _trigger_game_over()
@@ -1864,7 +2007,7 @@ def update_projectiles():
                 if z.health <= 0:
                     spawn_skull(z.actor.x, z.actor.y)
                     zombies.remove(z)
-                    game.money += int(10 * game.coin_multiplier)
+                    _kill("zombie", int(10 * game.coin_multiplier))
                 if p.bomb:
                     do_bomb_explosion(p.actor.x, p.actor.y)
                 elif p.explosive:
@@ -1879,7 +2022,7 @@ def update_projectiles():
                 if z.health <= 0:
                     spawn_skull(z.actor.x, z.actor.y)
                     fast_zombies.remove(z)
-                    game.money += int(20 * game.coin_multiplier)
+                    _kill("fast", int(20 * game.coin_multiplier))
                 if p.bomb:
                     do_bomb_explosion(p.actor.x, p.actor.y)
                 elif p.explosive:
@@ -1894,7 +2037,7 @@ def update_projectiles():
                 if z.health <= 0:
                     spawn_skull(z.actor.x, z.actor.y)
                     tank_zombies.remove(z)
-                    game.money += int(30 * game.coin_multiplier)
+                    _kill("tank", int(30 * game.coin_multiplier))
                 if p.bomb:
                     do_bomb_explosion(p.actor.x, p.actor.y)
                 elif p.explosive:
@@ -1909,7 +2052,7 @@ def update_projectiles():
                 if z.health <= 0:
                     spawn_skull(z.actor.x, z.actor.y)
                     police_zombies.remove(z)
-                    game.money += int(25 * game.coin_multiplier)
+                    _kill("police", int(25 * game.coin_multiplier))
                 if p.bomb:
                     do_bomb_explosion(p.actor.x, p.actor.y)
                 elif p.explosive:
@@ -1925,7 +2068,7 @@ def update_projectiles():
                 if boss.health <= 0:
                     boss.dying      = True
                     boss.anim_frame = 0
-                    game.money += int(100 * game.coin_multiplier)
+                    _kill("boss", int(100 * game.coin_multiplier))
                 if p.bomb:
                     do_bomb_explosion(p.actor.x, p.actor.y)
                 if p in projectiles:
@@ -1951,28 +2094,28 @@ def do_explosion(px, py):
             if z.health <= 0:
                 spawn_skull(z.actor.x, z.actor.y)
                 zombies.remove(z)
-                game.money += int(10 * game.coin_multiplier)
+                _kill("zombie", int(10 * game.coin_multiplier))
     for z in fast_zombies[:]:
         if ((z.actor.x - px) ** 2 + (z.actor.y - py) ** 2) ** 0.5 <= radius:
             z.health -= 1
             if z.health <= 0:
                 spawn_skull(z.actor.x, z.actor.y)
                 fast_zombies.remove(z)
-                game.money += int(20 * game.coin_multiplier)
+                _kill("fast", int(20 * game.coin_multiplier))
     for z in tank_zombies[:]:
         if ((z.actor.x - px) ** 2 + (z.actor.y - py) ** 2) ** 0.5 <= radius:
             z.health -= 1
             if z.health <= 0:
                 spawn_skull(z.actor.x, z.actor.y)
                 tank_zombies.remove(z)
-                game.money += int(30 * game.coin_multiplier)
+                _kill("tank", int(30 * game.coin_multiplier))
     for z in police_zombies[:]:
         if ((z.actor.x - px) ** 2 + (z.actor.y - py) ** 2) ** 0.5 <= radius:
             z.health -= 1
             if z.health <= 0:
                 spawn_skull(z.actor.x, z.actor.y)
                 police_zombies.remove(z)
-                game.money += int(25 * game.coin_multiplier)
+                _kill("police", int(25 * game.coin_multiplier))
 
 
 def update_explosions(dt):
@@ -1996,28 +2139,28 @@ def do_bomb_explosion(px, py):
             if z.health <= 0:
                 spawn_skull(z.actor.x, z.actor.y)
                 zombies.remove(z)
-                game.money += int(10 * game.coin_multiplier)
+                _kill("zombie", int(10 * game.coin_multiplier))
     for z in fast_zombies[:]:
         if ((z.actor.x - px) ** 2 + (z.actor.y - py) ** 2) ** 0.5 <= radius:
             z.health -= 2
             if z.health <= 0:
                 spawn_skull(z.actor.x, z.actor.y)
                 fast_zombies.remove(z)
-                game.money += int(20 * game.coin_multiplier)
+                _kill("fast", int(20 * game.coin_multiplier))
     for z in tank_zombies[:]:
         if ((z.actor.x - px) ** 2 + (z.actor.y - py) ** 2) ** 0.5 <= radius:
             z.health -= 2
             if z.health <= 0:
                 spawn_skull(z.actor.x, z.actor.y)
                 tank_zombies.remove(z)
-                game.money += int(30 * game.coin_multiplier)
+                _kill("tank", int(30 * game.coin_multiplier))
     for z in police_zombies[:]:
         if ((z.actor.x - px) ** 2 + (z.actor.y - py) ** 2) ** 0.5 <= radius:
             z.health -= 2
             if z.health <= 0:
                 spawn_skull(z.actor.x, z.actor.y)
                 police_zombies.remove(z)
-                game.money += int(25 * game.coin_multiplier)
+                _kill("police", int(25 * game.coin_multiplier))
 
 
 def update_bomb_explosions(dt):
@@ -2084,7 +2227,7 @@ def shoot_shotgun():
 # ---------------------------------
 
 def on_key_down(key):
-    global facing, settings_open, settings_page
+    global facing, settings_open, settings_page, stats_open
 
     # Mode selection
     if game.state == "mode_select":
@@ -2135,7 +2278,10 @@ def on_key_down(key):
 
     # Restart
     if game.state == "game_over" and key == pygame.K_r:
+        _save_progress()
+        _was_unlocked    = game.skin_unlocked
         game.__init__()
+        game.skin_unlocked  = _was_unlocked
         zombies[:]          = []
         fast_zombies[:]     = []
         tank_zombies[:]     = []
@@ -2146,8 +2292,8 @@ def on_key_down(key):
         boss_hit_effects[:] = []
         game.boss_level     = 0
         key_items[:]        = [spawn_key()]
-        classd.topleft   = (TILE_W, TILE_H * (MAP_H - 3))
-        doctor.topleft   = (TILE_W * 4, TILE_H * 3)
+        classd.topleft      = (TILE_W, TILE_H * (MAP_H - 3))
+        doctor.topleft      = (TILE_W * 4, TILE_H * 3)
         return
 
     # Shop navigation / exit
@@ -2175,6 +2321,11 @@ def on_key_down(key):
         game.skin_shop_page = (game.skin_shop_page + 1) % SKIN_SHOP_PAGES
         return
 
+    # Stats close
+    if stats_open and key in (pygame.K_x, pygame.K_k):
+        stats_open = False
+        return
+
     # Settings navigation / exit
     if settings_open and key == pygame.K_x:
         settings_open = False
@@ -2188,13 +2339,25 @@ def on_key_down(key):
 
     # Open settings from pause
     if (game.paused and not game.shop_open and not game.skin_shop_open
-            and not settings_open and key == pygame.K_t):
+            and not settings_open and not stats_open and key == pygame.K_t):
         settings_open = True
         return
 
     # Open cosmetic shop while paused
-    if game.paused and not game.shop_open and not game.skin_shop_open and not settings_open and key == pygame.K_s:
+    if game.paused and not game.shop_open and not game.skin_shop_open and not settings_open and not stats_open and key == pygame.K_s:
         game.skin_shop_open = True
+        return
+
+    # Open stats while paused
+    if (game.paused and not game.shop_open and not game.skin_shop_open
+            and not settings_open and not stats_open and key == pygame.K_k):
+        stats_open = True
+        return
+
+    # Return to main menu from pause
+    if (game.paused and not game.shop_open and not game.skin_shop_open
+            and not settings_open and not stats_open and key == pygame.K_m):
+        _go_to_menu()
         return
 
     # Toggle pause
@@ -2249,7 +2412,7 @@ def on_key_down(key):
 # ---------------------------------
 
 def on_mouse_down(pos):
-    global using_skin
+    global using_skin, skin_coins
 
     p = pos  # already (x, y) tuple from pygame event
 
@@ -2267,6 +2430,7 @@ def on_mouse_down(pos):
                 btn   = pygame.Rect(btn_x, row_y + 2, _SETTINGS_BTN_W, _SETTINGS_BTN_H)
                 if btn.collidepoint(*p):
                     settings[key] = not settings.get(key, True)
+                    _save_progress()
         return
 
     if not game.shop_open and not game.skin_shop_open:
@@ -2277,16 +2441,18 @@ def on_mouse_down(pos):
         if game.skin_shop_page == 0:
             zombie_skin_icon.center = (WIDTH // 2, HEIGHT // 2 - 20)
             if zombie_skin_icon.collidepoint(*p):
-                if not game.skin_unlocked and game.money >= SKIN_COST:
-                    game.money       -= SKIN_COST
+                if not game.skin_unlocked and skin_coins >= SKIN_COST:
+                    skin_coins         -= SKIN_COST
                     game.skin_unlocked = True
                     using_skin         = True
                     update_player_sprite()
+                    _save_progress()
                     play_sound("snd_buy")
                     print("Protocol unlocked: Class-D Reanimation.")
                 elif game.skin_unlocked:
                     using_skin = not using_skin
                     update_player_sprite()
+                    _save_progress()
                     print("Skin Protocol: {}.".format("Active" if using_skin else "Inactive"))
                 else:
                     print("Insufficient Dinero for cosmetic upgrade.")

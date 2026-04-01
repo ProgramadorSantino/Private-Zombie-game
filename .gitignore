@@ -5,3 +5,5 @@ desktop.ini
 # root-level stray boss images (should live in BossImages/)
 /boss_*.png
 /checklist.md
+# local save file — each player gets their own fresh copy
+save_data.json
